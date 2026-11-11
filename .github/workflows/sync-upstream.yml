@@ -14,7 +14,7 @@ jobs:
           ref: main   # 如果你的默认分支不是 main，请替换
 
       - name: Sync Upstream
-        uses: aormsby/Fork-Sync-With-Upstream-action@v3
+        uses: aormsby/Fork-Sync-With-Upstream-action@v3.4
         with:
           upstream_sync_repo: 602832789/qq-farm-bot
           upstream_sync_branch: main
