@@ -1,0 +1,22 @@
+name: Sync Fork with Upstream
+on:
+  schedule:
+    - cron: '6 16 * * *'  # 每天 UTC 16:06（北京时间 0:06）运行
+  workflow_dispatch:       # 允许在 Actions 页面手动点击触发
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main   # 如果你的默认分支不是 main，请替换
+
+      - name: Sync Upstream
+        uses: aormsby/Fork-Sync-With-Upstream-action@v3
+        with:
+          upstream_sync_repo: 602832789/qq-farm-bot
+          upstream_sync_branch: main
+          target_sync_branch: main
+          target_repo_token: ${{ secrets.GITHUB_TOKEN }}
