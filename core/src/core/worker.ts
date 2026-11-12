@@ -8,7 +8,7 @@ const { CONFIG, updateRuntimeConfig } = require('../config/config');
 const { getLevelExpProgress, loadConfigs } = require('../config/gameConfig');
 const { getAutomation, getPreferredSeed, getConfigSnapshot, applyConfigSnapshot } = require('../models/store');
 const { checkAndClaimEmails, configureEmailClaim, getEmailDailyState } = require('../services/email');
-const { checkFarm, startFarmCheckLoop, stopFarmCheckLoop, refreshFarmCheckLoop, getLandsDetail, getAvailableSeeds, purchaseSeed, runFarmOperation, runFertilizerByConfig, fertilizeOwnLand } = require('../services/farm');
+const { checkFarm, startFarmCheckLoop, stopFarmCheckLoop, refreshFarmCheckLoop, getOwnFarmMaturityDelayMs, consumeFarmWakeup, getLandsDetail, getAvailableSeeds, purchaseSeed, runFarmOperation, runFertilizerByConfig, fertilizeOwnLand } = require('../services/farm');
 const { checkFriends, startFriendCheckLoop, stopFriendCheckLoop, refreshFriendCheckLoop, getFriendsList, getFriendsListCacheOnly, getFriendLandsDetail, doFriendOperation, deleteFriend, runScheduledStealCheck, runGoldenBugPlacement } = require('../services/friend');
 const { getInteractRecords } = require('../services/interact');
 const { processInviteCodes } = require('../services/invite');
@@ -120,6 +120,13 @@ let nextStealRunAt: number = 0;
 let nextStealDelayMs: number = 0;
 // 网关卡住时两条定时任务各自的退避时长（毫秒），0 表示按正常间隔跑
 const businessBackoffMs: Record<string, number> = { farm: 0, friend: 0 };
+// 网关「半死不活」（心跳时好时坏、持续慢请求）时闸门会长期为 false，退避会
+// 每轮把到期线往后推，形成无限饥饿。与前台让路同口径加连续次数 + 累计时长
+// 双上限，到顶强制照常跑一轮，由 checkFarm 内部的请求超时自行兜底。
+const BUSINESS_BACKOFF_MAX_STREAK = 5;
+const BUSINESS_BACKOFF_MAX_TOTAL_MS = 5 * 60 * 1000;
+const businessBackoffStreak: Record<string, number> = { farm: 0, friend: 0 };
+const businessBackoffTotalMs: Record<string, number> = { farm: 0, friend: 0 };
 let lastStatusHash: string = '';
 let lastStatusSentAt: number = 0;
 let onSellGain: ((deltaGold: any) => void) | null = null;
@@ -225,6 +232,31 @@ function randomIntervalMs(minMs: number, maxMs: number): number {
     return sec * 1000;
 }
 
+// 自家农场成熟驱动：比服务端成熟墙钟晚 1.5 秒唤醒，避开时间同步的小偏差。
+const FARM_MATURITY_WAKE_BUFFER_MS = 1500;
+const FARM_WAKEUP_IMMEDIATE_MS = 200;
+const FARM_TICK_LOCK_WAIT_MS = 30 * 1000;
+
+/**
+ * 算农场线下一次唤醒时刻。
+ * 优先级：巡查中攒下的推送 / 收获失败 / 整轮超时登记的「尽快补跑」
+ *       > 下一块自家作物的成熟点
+ *       > 常规 20~25 秒随机轮询。
+ * 配置下发时也走这里，所以不会再出现「面板保存把到期线推后、农场二十多秒叫不醒」。
+ */
+function planNextFarmRun(nowMs: number, farmMs: number): number {
+    const wakeReason = consumeFarmWakeup();
+    if (wakeReason) {
+        logFileOnly('巡田', `提前唤醒农场巡查: ${wakeReason}`);
+        return nowMs + FARM_WAKEUP_IMMEDIATE_MS;
+    }
+    const maturityDelayMs = getOwnFarmMaturityDelayMs(nowMs);
+    const maturityAt = maturityDelayMs > 0
+        ? nowMs + maturityDelayMs + FARM_MATURITY_WAKE_BUFFER_MS
+        : Number.POSITIVE_INFINITY;
+    return Math.max(nowMs + 1000, Math.min(nowMs + farmMs, maturityAt));
+}
+
 function resetUnifiedSchedule(options: { preserveSteal?: boolean } = {}): void {
     const farmMs = randomIntervalMs(
         CONFIG.farmCheckIntervalMin || CONFIG.farmCheckInterval || 2000,
@@ -235,7 +267,7 @@ function resetUnifiedSchedule(options: { preserveSteal?: boolean } = {}): void {
         workerConfig.friendCheckIntervalMax || 15000
     );
     const now = Date.now();
-    nextFarmRunAt = now + farmMs;
+    nextFarmRunAt = planNextFarmRun(now, farmMs);
     // 老版本节奏：帮忙循环保底常规间隔，偷菜首轮给一个短的随机窗口，
     // 后续完全由 runScheduledStealCheck 返回的成熟时间动态决定。
     nextFriendRunAt = now + friendMs;
@@ -244,6 +276,10 @@ function resetUnifiedSchedule(options: { preserveSteal?: boolean } = {}): void {
     if (!options.preserveSteal) nextStealRunAt = now + randomIntervalMs(5000, 15000);
     businessBackoffMs.farm = 0;
     businessBackoffMs.friend = 0;
+    businessBackoffStreak.farm = 0;
+    businessBackoffStreak.friend = 0;
+    businessBackoffTotalMs.farm = 0;
+    businessBackoffTotalMs.friend = 0;
 }
 
 const BUSINESS_TICK_LABEL: Record<string, string> = { farm: '农场定时任务', friend: '好友定时任务' };
@@ -295,6 +331,8 @@ function nextBusinessTickDeferMs(kind: string): number {
     if (isGatewayHealthyForBusiness(load)) {
         if (businessBackoffMs[kind] > 0) {
             businessBackoffMs[kind] = 0;
+            businessBackoffStreak[kind] = 0;
+            businessBackoffTotalMs[kind] = 0;
             log('系统', `网关已恢复，${BUSINESS_TICK_LABEL[kind]}回到正常间隔`, {
                 module: 'system',
                 event: '网关退避',
@@ -308,6 +346,8 @@ function nextBusinessTickDeferMs(kind: string): number {
     const firstDefer = businessBackoffMs[kind] === 0;
     const backoffMs = nextBusinessBackoffMs(businessBackoffMs[kind]);
     businessBackoffMs[kind] = backoffMs;
+    businessBackoffStreak[kind] = (businessBackoffStreak[kind] || 0) + 1;
+    businessBackoffTotalMs[kind] = (businessBackoffTotalMs[kind] || 0) + backoffMs;
     if (firstDefer) {
         logWarn('系统', `网关无回包，${BUSINESS_TICK_LABEL[kind]}退避 ${formatDurationZh(backoffMs)}（${describeGatewayStall(load)}）`, {
             module: 'system',
@@ -316,6 +356,23 @@ function nextBusinessTickDeferMs(kind: string): number {
             requestClass: kind,
             backoffMs,
         });
+    }
+    // 到顶强制探活一轮：连续 5 次或累计推迟超过 5 分钟后，本轮不再 defer，
+    // 并重置计数让下一轮从 30s 重新计。否则慢网关会让自家农场被无限期晾着。
+    if (businessBackoffStreak[kind] > BUSINESS_BACKOFF_MAX_STREAK
+        || businessBackoffTotalMs[kind] > BUSINESS_BACKOFF_MAX_TOTAL_MS) {
+        logWarn('系统', `网关退避已达上限，${BUSINESS_TICK_LABEL[kind]}强制探活一轮`, {
+            module: 'system',
+            event: '网关退避',
+            result: 'force_probe',
+            requestClass: kind,
+            streak: businessBackoffStreak[kind],
+            totalMs: businessBackoffTotalMs[kind],
+        });
+        businessBackoffMs[kind] = 0;
+        businessBackoffStreak[kind] = 0;
+        businessBackoffTotalMs[kind] = 0;
+        return 0;
     }
     return backoffMs;
 }
@@ -349,31 +406,32 @@ async function runFarmTick(auto: any): Promise<void> {
             if (auto.email !== false) await openCharitySettlementGiftPacksSilently();
             if (auto.fertilizer_gift) await openFertilizerGiftPacksSilently();
         });
-    } catch {
-        // ignore
+    } catch (e: any) {
+        // 整轮失败不能静默：否则某个 helper 永久失效时面板上看起来一切正常。
+        logWarn('系统', `农场定时任务执行失败: ${e?.message || e}`, {
+            module: 'system', event: '农场定时任务', result: 'error', requestClass: 'farm',
+        });
     } finally {
         // 与 friend/steal tick 一致：账号停机又立刻重启时，旧轮次不能把新会话
         // 刚算好的到期时间覆盖掉，也不能提前解除新会话的运行中守卫。
         if (generation === runtimeGeneration) {
-            nextFarmRunAt = Date.now() + farmMs;
+            nextFarmRunAt = planNextFarmRun(Date.now(), farmMs);
             farmTaskRunning = false;
         }
     }
 }
 
-// ============ 帮助 Tick（帮忙 + 放虫放草，老版本节奏：低频 ~10 分钟）============
+// ============ 帮助 Tick（帮忙 + 放虫放草，低频固定 10 分钟一轮）============
+// 好友帮忙不需要追着时间跑：每日额度、经验上限、捣乱次数都是低频约束；
+// 偷菜才需要精确卡成熟时刻，已拆到独立的 runStealTick（成熟驱动）。
+// 调度器首次启动的首次到期窗口由 friendCheckIntervalMin/Max 决定（30~35 秒），
+// 之后每轮结束都按这里的固定间隔推进 nextFriendRunAt。
+const HELP_TICK_INTERVAL_MS = 10 * 60 * 1000;
+
 async function runFriendTick(auto: any): Promise<void> {
     if (friendTaskRunning) return;
     const generation = runtimeGeneration;
-    // 老版本 runHelpTick：间隔随机 30~35s，但最终固定抬到 10 分钟低频——
-    // 好友帮忙不需要追着时间跑，偷菜才需要（有独立成熟驱动循环）。
-    const helpMs = Math.max(
-        10 * 60 * 1000,
-        randomIntervalMs(
-            workerConfig.helpCheckIntervalMin || 30000,
-            workerConfig.helpCheckIntervalMax || 35000
-        )
-    );
+    const helpMs = HELP_TICK_INTERVAL_MS;
     // friend 总开关仍控制好友任务总入口；关闭时也要推进到期时间，避免调度器每秒空转。
     if (!auto.friend) {
         nextFriendRunAt = Date.now() + helpMs;
@@ -454,7 +512,10 @@ async function runUnifiedTick(): Promise<void> {
 
     const auto = getAutomation();
     // 农场仍串行（要等它真做完）；好友/偷菜在访问间隔中会让出锁，不必让它们挡住后续 tick。
-    if (dueFarm) await runExclusiveAutomationTask('farm_tick', () => runFarmTick(auto));
+    if (dueFarm) await runExclusiveAutomationTask('farm_tick', () => runFarmTick(auto), {
+        priority: true,
+        timeoutMs: FARM_TICK_LOCK_WAIT_MS,
+    });
     if (!unifiedSchedulerRunning || !loginReady || generation !== runtimeGeneration) return;
     // 好友/偷菜这里**不能**再套一层自动化锁：checkFriends 内部按单次访问用 detached 独立入队，
     // 一旦外层也持锁，那些 detached 调用会排到「外层任务自己」后面，而外层正在 await 它们 —— 死锁。
@@ -504,6 +565,10 @@ function stopUnifiedScheduler(): void {
     // 停机 300ms 内可能被重新拉起，让路/退避状态不带进新会话。
     businessBackoffMs.farm = 0;
     businessBackoffMs.friend = 0;
+    businessBackoffStreak.farm = 0;
+    businessBackoffStreak.friend = 0;
+    businessBackoffTotalMs.farm = 0;
+    businessBackoffTotalMs.friend = 0;
     foregroundYieldStreak.farm = 0;
     foregroundYieldStreak.friend = 0;
     nextStealDelayMs = 0;
@@ -889,6 +954,9 @@ async function startBot(config: any): Promise<void> {
         if (!canContinueLogin()) return;
 
         // 登录后只拉一次背包，同时初始化点券（1002）和金豆豆（1005）
+        // goldBeanReady 决定金豆当日基线能否用登录余额：背包拉取失败时
+        // userState.goldBean 仍是占位 0，拿它当基线会把全部余额算成今日净增。
+        let goldBeanReady = false;
         try {
             const bagReply = await runExclusiveAutomationTask('login_bag_init', getBag);
             const items = getBagItems(bagReply);
@@ -905,13 +973,20 @@ async function startBot(config: any): Promise<void> {
             const state = getUserState();
             state.coupon = Math.max(0, coupon);
             state.goldBean = Math.max(0, goldBean);
+            goldBeanReady = true;
         } catch {
-            // ignore
+            // 背包拉取失败：金豆基线传 null，等 ItemNotify 带回权威余额后再起算。
         }
         // 登录成功后，以当前金币/经验/点券作为统计基线，并清空会话增量
         const latest = getUserState();
         const accountId = process.env.FARM_ACCOUNT_ID || '';
-        initStatsWithPersistence(accountId, Number(latest.gold || 0), Number(latest.exp || 0), Number(latest.coupon || 0));
+        initStatsWithPersistence(
+            accountId,
+            Number(latest.gold || 0),
+            Number(latest.exp || 0),
+            Number(latest.coupon || 0),
+            goldBeanReady ? Number(latest.goldBean || 0) : null,
+        );
         resetSessionGains();
 
         // 登录成功后启动各模块
@@ -1600,7 +1675,9 @@ function syncStatus(force: boolean = false): void {
         friendQuiet,
         helpQuiet: friendQuiet,
         stealQuiet: friendQuiet,
-        // 好友帮忙与偷菜在同一轮好友巡查里一起做，开关状态各自独立，首页据此决定显示倒计时还是「已关闭」。
+        // 帮忙与偷菜是两条独立到期时间线：helpRemainSec 取 nextFriendRunAt（固定 10 分钟一轮），
+        // stealRemainSec 取 nextStealRunAt（按好友作物成熟时刻动态唤醒）。开关各自独立，
+        // 首页据此决定每条倒计时显示读数还是「已关闭」。
         helpEnabled: automation.friend_help !== false,
         stealEnabled: automation.friend_steal !== false,
         friendEnabled: automation.friend !== false,
