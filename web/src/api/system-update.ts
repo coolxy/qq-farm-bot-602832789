@@ -82,6 +82,17 @@ export interface RemoteVersionInfo {
   updatedAt: string
 }
 
+/** 宿主机更新助手：容器部署下一键更新的执行者（独立容器，挂着 docker.sock）。 */
+export interface DockerUpdateAgentStatus {
+  available: boolean
+  startedAt: number | null
+  heartbeatAt: number | null
+  projectDir: string
+  protocol: number
+  heartbeatFile: string
+  reason: string
+}
+
 export interface SystemUpdateStatus {
   mode: 'source' | 'docker' | 'packaged' | 'unknown'
   gitSupported: boolean
@@ -116,7 +127,7 @@ export interface SystemUpdateStatus {
   webBuildId: string
   webVersion: string
 
-  /** 本地版本（仓库根 version.json，容器里同样存在）。 */
+  /** 本地版本（仓库根 version.json，缺失时退到前端构建产物里的版本）。 */
   localVersion: string
   localBuild: number
   /** 远端版本；没查过时为 null。 */
@@ -127,6 +138,12 @@ export interface SystemUpdateStatus {
   remoteCheckError: string
   /** 容器部署时给用户在宿主机执行的命令；其它模式为空串。 */
   deployCommand: string
+  /** 容器部署时在宿主机启用更新助手的命令；其它模式为空串。 */
+  agentEnableCommand: string
+  /** 宿主机更新助手状态；非容器模式下 available 恒为 false。 */
+  dockerAgent: DockerUpdateAgentStatus
+  /** 前端构建产物记录的构建次数，版本号兜底用。 */
+  webBuild: number
 }
 
 export async function fetchSystemUpdateStatus(): Promise<SystemUpdateStatus> {

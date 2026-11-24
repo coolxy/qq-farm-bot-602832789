@@ -44,7 +44,7 @@ export const useAppUpdateStore = defineStore('app-update', () => {
   const dirtyCount = computed(() => status.value?.dirtyFiles?.length || 0)
 
   /**
-   * 容器部署：版本由镜像决定，更新只能在宿主机重建。
+   * 容器部署：版本由镜像决定，重建只能发生在宿主机。
    * 面板要按这套语义换一套说法，而不是继续展示 git 部署的「落后几个提交」。
    */
   const isDocker = computed(() => status.value?.mode === 'docker')
@@ -54,11 +54,23 @@ export const useAppUpdateStore = defineStore('app-update', () => {
   const remoteInfo = computed(() => status.value?.remoteVersion || null)
   /** 宿主机重建命令，只在容器模式下有值。 */
   const deployCommand = computed(() => status.value?.deployCommand || '')
+  /** 在宿主机启用更新助手的命令，只在容器模式下有值。 */
+  const agentEnableCommand = computed(() => status.value?.agentEnableCommand || '')
+  /**
+   * 宿主机更新助手在不在。
+   *
+   * 容器里没法自己重建自己，一键更新靠的是这个独立容器。它不在时按钮就该禁用并把
+   * 启用方式摆出来，而不是给一个点了报错的按钮。
+   */
+  const dockerAgent = computed(() => status.value?.dockerAgent || null)
+  const agentAvailable = computed(() => Boolean(dockerAgent.value?.available))
   const localVersionLabel = computed(() => {
     const info = status.value
-    if (!info?.localVersion)
+    const version = info?.localVersion || info?.webVersion || ''
+    if (!version)
       return ''
-    return info.localBuild ? `v${info.localVersion}（第 ${info.localBuild} 次更新）` : `v${info.localVersion}`
+    const build = info?.localBuild || info?.webBuild || 0
+    return build ? `v${version}（第 ${build} 次更新）` : `v${version}`
   })
 
   /**
@@ -75,6 +87,10 @@ export const useAppUpdateStore = defineStore('app-update', () => {
       return false
     if (!status.value.applySupported || status.value.jobBusy || acting.value)
       return false
+    // 容器模式没有 git、也没有「落后几个提交」，能更新与否只取决于更新助手在不在。
+    // 「远端有没有新版本」不在这里拦：更新自己会先查一次，没新版本会明确告诉用户。
+    if (isDocker.value)
+      return agentAvailable.value
     if (dirtyCount.value > 0)
       return false
     if (status.value.behindCount > 0 || status.value.needsApply)
@@ -282,6 +298,9 @@ export const useAppUpdateStore = defineStore('app-update', () => {
     hasNewVersion,
     remoteInfo,
     deployCommand,
+    agentEnableCommand,
+    dockerAgent,
+    agentAvailable,
     localVersionLabel,
     canApply,
     canRollback,

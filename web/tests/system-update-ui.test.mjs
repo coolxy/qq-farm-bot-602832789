@@ -76,3 +76,28 @@ test('vite 构建产出 version.json，供后端判断「服务器上是哪份�
   assert.match(viteConfig, /buildId/, '要写 buildId')
   assert.match(viteConfig, /__APP_BUILD_ID__/, '要把 buildId 烘焙进 bundle')
 })
+
+test('容器部署：助手在跑就显示「立即更新」，不在就给出启用命令', () => {
+  // 以前容器模式只有一个灰按钮加一句「去宿主机执行命令」。有更新助手（updater 容器）
+  // 时，点一下就该能更新；没有时要说清怎么启用，而不是把用户挡在门外。
+  assert.match(panel, /!store\.isDocker \|\| store\.agentAvailable/, '助手在跑时容器模式也要有按钮')
+  assert.match(panel, /store\.agentEnableCommand/, '要给出启用助手的命令')
+  assert.match(panel, /store\.deployCommand/, '手动重建命令仍然保留')
+  assert.match(panel, /agentAvailable \? '已就绪' : '未启用'/, '要有状态标记')
+  assert.match(store, /agentAvailable/, 'store 要暴露助手状态')
+  assert.match(store, /return agentAvailable\.value/, '容器模式能不能点，取决于助手在不在')
+  assert.match(api, /dockerAgent: DockerUpdateAgentStatus/, '类型里要有助手状态')
+  assert.match(api, /agentEnableCommand: string/)
+})
+
+test('版本号兜底：容器里读不到 version.json 也不显示「未知」', () => {
+  // 镜像运行阶段漏拷 version.json 时，「当前运行版本」会退成「未知」。
+  // 后端退到 web/dist/version.json，前端再兜一层。
+  assert.match(panel, /store\.status\?\.localVersion \|\| store\.status\?\.webVersion/, '前端要有第二条兜底')
+  assert.match(api, /webBuild: number/, '构建次数也要能兜底')
+  assert.match(store, /info\?\.localBuild \|\| info\?\.webBuild/, '版本标签同样兜底')
+})
+
+test('容器部署不展示「历史版本」——归档是源码部署才有的东西', () => {
+  assert.match(panel, /v-if="!store\.isDocker" class="farm-card/, '容器里没有 releases 归档，别给空列表')
+})

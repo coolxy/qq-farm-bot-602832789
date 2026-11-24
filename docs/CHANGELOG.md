@@ -15,6 +15,7 @@
 
 | 版本 | 更新序号 | 日期 | 更新内容 | 提交 |
 | --- | --- | --- | --- | --- |
+| v3.36.5 | #257 | 2026-11-24 | Docker 部署：面板内一键更新，容器里也能看到版本号 | — |
 | v3.36.3 | #256 | 2026-11-24 | Docker 部署：更新指引改对，重启后自动登录修复 | — |
 | v3.36.2 | #255 | 2026-11-24 | 同步上游 #185：好友牧场一键帮忙生产 | — |
 | v3.36.1 | #253 | 2026-11-24 | 牧场资产换便便并显示本次增量，农场首页日志卡片定高 | — |
@@ -245,6 +246,41 @@ flowchart TB
 ```
 
 ## 详细记录
+
+### 2026-11-24 · v3.36.5（#257） · Docker 部署：面板内一键更新，容器里也能看到版本号
+
+两条 NAS 反馈连在一起：面板「当前运行版本」显示「未知」，以及容器部署为什么要一直跑去宿主机敲命令。
+
+**一、「当前运行版本：未知」是两条来源同时断**
+
+页面上的版本号有两条来路：`version.json` 的 `localVersion`，和 `releases/` 归档里的 `activeVersion`。容器里两条都不通：
+
+- `core/Dockerfile` 只在 `web-builder` 阶段 `COPY version.json`（那是给 vite 注入版本号用的），`runner` 阶段没拷 → `/app/version.json` 根本不存在；
+- 容器里永远没有 `releases/` 归档（那是源码部署更新时拍的快照）→ `summary.activeVersion` 是空串。
+
+结果就是最该看到版本号的地方写着「未知」。三层兜底一起补上：
+
+- `runner` 阶段 `COPY --from=web-builder /app/version.json ../version.json`。放在最后一行——版本号每次更新都变，放前面会让下面所有层缓存全部失效。
+- `readLocalVersion` 读不到根 `version.json` 时退到 `web/dist/version.json`（前端构建产物，镜像里一定有的东西，它本来就要发给浏览器）。
+- 前端再兜一层：`localVersion || webVersion`、`localBuild || webBuild`，任何一条缺字段都不会退回「未知」。
+
+**二、容器部署的一键更新：交给独立的 updater 容器**
+
+容器里没有 `.git`、没有 git 命令，也不该在容器里改代码——改动会随重建消失。而「重建容器」这件事只能由宿主机的 docker daemon 做。所以新增一个**独立的轻量容器** `updater`（`scripts/docker-update-agent.sh`）：挂着 `docker.sock`、项目目录和数据卷，常驻轮询更新请求。
+
+为什么不能是应用容器里的一个子进程：要重建的正是应用容器自己。同一个容器里的进程会在 `docker stop` 那一刻一起被杀，更新只做一半——这正是「容器里更新到一半服务就没了」的成因。
+
+- **通信只走数据卷**：`update-request.json`（应用→助手）、`update-job.json` / `update-job.log`（助手→应用）、`update-agent.json`（助手心跳）。作业 JSON 的字段与后端 `PanelUpdateJobState` 一一对齐，后端不需要翻译层。
+- **作业活性看心跳，不看 pid**：助手在另一个容器里，它的 pid 在后端命名空间毫无意义（通常是 1，而 pid 1 永远活着）。心跳 120 秒没更新才判「中断」，而不是一直转圈。
+- **compose project 名从自身容器 label 读**（`com.docker.compose.project`），不猜目录名。猜错会另起一套容器，还会撞 `container_name`。
+- **代码没变化就跳过重建**：NAS 上重建一次镜像几分钟起，为一个空更新等一轮不划算。
+- **runtime 挪进数据卷**（compose 设 `FARM_RUNTIME_DIR=/app/core/data/runtime`）：容器重建后新容器还能读回「更新到哪了」。
+- **安全边界**：`profiles: ["update"]` 门控，默认不启动（挂 `docker.sock` 等于宿主机 root 权限，这种能力不该由默认值替用户决定）；`GIT_TERMINAL_PROMPT=0` 让缺凭据时直接失败而不是卡住；脚本里没有 `down -v`、没有 `reset --hard`、没有 `git clean`，测试逐条断言。
+- **性能**：作业 JSON 由**一个 awk** 生成。早先的写法是 `tail|tr|sed|awk` 外加一堆 `$( )` 子壳，一次要起二十来个进程——Windows 上实测单次更新因此多花 8 秒，而这份 JSON 每两秒就要写一次，NAS 的 ARM CPU 上代价只会更大。
+
+前端跟着改：助手在跑时容器模式也显示「立即更新」（走同一个 `/apply` 接口），不在时给出两段可复制的命令——启用助手的 `docker compose --profile update up -d`，以及原来的手动重建命令。容器模式还隐藏了「历史版本」区块：镜像本身就是历史，那里永远是空列表。
+
+**验证**：core **1060** 条（新增 7 条容器模式：版本兜底、助手探测/心跳过期/发起更新/拒绝空更新/僵尸作业判定）、web **359** 条（新增 3 条面板接线、3 条 compose/镜像/脚本护栏、3 条**真跑助手脚本**——把 git 与 docker 换成假命令，校验写出的作业 JSON、去重、拉取失败分支）；`tsc`、`vue-tsc` 通过，eslint 无告警。
 
 ### 2026-11-24 · v3.36.3（#256） · Docker 部署：更新指引改对，重启后自动登录修复
 

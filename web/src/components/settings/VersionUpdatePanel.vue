@@ -67,9 +67,18 @@ const applyHint = computed(() => {
   const status = store.status
   if (!status)
     return '正在读取状态…'
-  // 容器部署先给结论：不是「不支持」，而是「换一种更新方式」。
-  if (store.isDocker)
-    return '容器部署：版本由镜像决定，请在宿主机执行下方重建命令'
+  // 容器部署分两种：有更新助手就能一键更新，没有就只能去宿主机执行命令。
+  if (store.isDocker) {
+    if (!store.agentAvailable)
+      return '容器部署：未启用宿主机更新助手，按下方命令在宿主机重建'
+    if (status.jobBusy)
+      return '已有任务在运行'
+    if (store.hasNewVersion)
+      return '远端有新版本，点「立即更新」由更新助手重建容器'
+    if (status.remoteCheckedAt != null)
+      return '已是最新版本'
+    return '点「立即更新」会先查远端，再由更新助手重建容器'
+  }
   if (!status.applySupported)
     return status.applyUnsupportedReason || '当前运行方式不支持面板一键更新'
   if (status.jobBusy)
@@ -98,25 +107,35 @@ const remoteHeadline = computed(() => {
 })
 
 /**
- * 当前版本号优先取 `version.json`（`localVersion`），而不是归档目录里记录的版本。
+ * 当前版本号优先取 `version.json`（`localVersion`），其次前端构建产物里的版本。
  *
  * 容器部署没有 releases 归档，`summary.activeVersion` 是空的——之前这里直接显示「未知」，
- * 而那恰恰是最需要看到版本号的场景。version.json 在容器里也存在，用它兜住。
+ * 而那恰恰是最需要看到版本号的场景。后端现在会把 `web/dist/version.json` 里的版本当兜底，
+ * 前端再兜一层，免得任何一条链路缺字段就退回「未知」。
  */
-const currentVersion = computed(() => store.status?.localVersion || store.summary?.activeVersion || '')
-const currentBuild = computed(() => store.status?.localBuild || store.summary?.activeBuild || 0)
+const currentVersion = computed(() =>
+  store.status?.localVersion || store.status?.webVersion || store.summary?.activeVersion || '',
+)
+const currentBuild = computed(() =>
+  store.status?.localBuild || store.status?.webBuild || store.summary?.activeBuild || 0,
+)
 
-const copied = ref(false)
+/** 提示文字用「好消息」配色：源码部署看能不能点更新，容器部署看有没有真的新版本。 */
+const hintPositive = computed(() =>
+  store.isDocker ? (store.agentAvailable && store.hasNewVersion) : store.canApply,
+)
+
+const copied = ref('')
 let copyTimer: ReturnType<typeof setTimeout> | null = null
 
 /**
- * 复制重建命令。
+ * 复制命令到剪贴板。
  *
- * 容器里没法一键更新，把命令做得「点一下就进剪贴板」是这页对 NAS 用户最有用的部分。
- * clipboard API 在非 HTTPS（NAS 常用 http + 端口）下不一定可用，所以留了 execCommand 兜底。
+ * 容器部署下这一页最实用的动作就是「把命令带走」：无论启不启用助手，用户都得去
+ * 宿主机上敲点东西。clipboard API 在非 HTTPS（NAS 常用 http + 端口）下不一定可用，
+ * 所以留了 execCommand 兜底。
  */
-async function copyDeployCommand() {
-  const text = store.deployCommand
+async function copyText(kind: string, text: string) {
   if (!text)
     return
   try {
@@ -136,11 +155,11 @@ async function copyDeployCommand() {
       document.body.removeChild(textarea)
     }
   }
-  copied.value = true
+  copied.value = kind
   if (copyTimer)
     clearTimeout(copyTimer)
   copyTimer = setTimeout(() => {
-    copied.value = false
+    copied.value = ''
   }, 2000)
 }
 
@@ -172,6 +191,19 @@ function handleApply() {
   const status = store.status
   if (!status)
     return
+  // 容器部署的「更新」= 请宿主机助手重建容器，说法得跟着换，不然会讲成 git 那套。
+  if (store.isDocker) {
+    const target = store.remoteInfo?.version ? `v${store.remoteInfo.version}` : '远端最新版本'
+    askConfirm(
+      '立即更新',
+      `将请求宿主机更新助手：拉取代码并重建容器（目标 ${target}）。构建期间面板会短暂断连，属于正常现象。`,
+      'primary',
+      () => {
+        void store.applyUpdate()
+      },
+    )
+    return
+  }
   const detail = status.behindCount > 0
     ? `将拉取 ${status.behindCount} 个新提交，然后重新构建并重启服务。更新期间面板会短暂断连，属于正常现象。`
     : '代码已经是最新，将重新构建并重启服务让改动生效。更新期间面板会短暂断连，属于正常现象。'
@@ -227,7 +259,12 @@ onUnmounted(() => {
     </h3>
     <p class="text-xs text-gray-500 -mt-2 dark:text-gray-400">
       <template v-if="store.isDocker">
-        容器部署：容器内不改代码，更新方式是宿主机拉取后重建容器
+        <template v-if="store.agentAvailable">
+          容器部署：更新由宿主机更新助手执行——拉取代码、重建镜像，再把这个容器换掉
+        </template>
+        <template v-else>
+          容器部署：更新由宿主机执行——拉取代码后重建容器；启用更新助手即可在面板上一键完成
+        </template>
       </template>
       <template v-else>
         从远端仓库拉取新代码、重新构建并重启，或者回退到任意一次历史构建
@@ -258,9 +295,10 @@ onUnmounted(() => {
           <BaseButton variant="outline" size="sm" :loading="store.loading" :disabled="inProgress || !store.canCheck" @click="handleCheck">
             检查更新
           </BaseButton>
-          <!-- 容器里没有可执行的一键更新，「立即更新」直接不给假按钮，改由下方命令区承接。 -->
+          <!-- 容器部署只有「更新助手在跑」时才给按钮：助手不在，点了也没人执行，
+               底下会改成给出启用命令，而不是留一个点了报错的假按钮。 -->
           <BaseButton
-            v-if="!store.isDocker"
+            v-if="!store.isDocker || store.agentAvailable"
             variant="primary"
             size="sm"
             :loading="store.acting"
@@ -274,7 +312,7 @@ onUnmounted(() => {
       </div>
 
       <div class="mt-3 border-t pt-3 text-xs dark:border-gray-700">
-        <span :class="store.canApply ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-500 dark:text-gray-400'">
+        <span :class="hintPositive ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-500 dark:text-gray-400'">
           {{ applyHint }}
         </span>
         <span v-if="store.status?.dirtyFiles?.length" class="ml-2 text-amber-600 dark:text-amber-400">
@@ -300,25 +338,66 @@ onUnmounted(() => {
       </div>
     </section>
 
-    <!-- 容器部署：宿主机重建命令 -->
+    <!-- 容器部署：更新方式的说明。助手在跑就讲清一键更新做了什么，不在就给出启用命令 -->
     <section v-if="store.isDocker" class="farm-card rounded-lg p-4">
       <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
         <h4 class="text-base text-gray-900 font-bold dark:text-gray-100">
-          在宿主机更新
+          {{ store.agentAvailable ? '宿主机更新助手' : '在宿主机更新' }}
         </h4>
-        <BaseButton variant="outline" size="sm" @click="copyDeployCommand">
-          {{ copied ? '已复制' : '复制命令' }}
-        </BaseButton>
+        <span
+          class="rounded px-1.5 py-0.5 text-[10px]"
+          :class="store.agentAvailable
+            ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
+            : 'bg-gray-200 text-gray-600 dark:bg-gray-700 dark:text-gray-300'"
+        >
+          {{ store.agentAvailable ? '已就绪' : '未启用' }}
+        </span>
       </div>
-      <p class="mb-2 text-xs text-gray-500 dark:text-gray-400">
-        容器内的代码与依赖都来自镜像，容器里改完会随重建消失。请登录 NAS，进入本项目目录执行：
-      </p>
-      <pre class="overflow-x-auto rounded bg-gray-900 px-3 py-2 text-xs text-gray-100"><code>{{ store.deployCommand }}</code></pre>
-      <ul class="mt-2 text-xs text-gray-500 space-y-1 dark:text-gray-400">
-        <li>· 数据在命名卷里，重建容器不会丢账号与配置；不要加 <code class="font-mono">-v</code>。</li>
-        <li>· 构建时间取决于机型，ARM 设备通常比 x86 慢一倍以上。</li>
-        <li>· 重建完成后本页面会自动连上新版本，点「检查更新」可确认版本号已变化。</li>
-      </ul>
+
+      <template v-if="store.agentAvailable">
+        <p class="text-xs text-gray-500 dark:text-gray-400">
+          点上方「立即更新」即可：助手在宿主机执行 <code class="font-mono">git pull --ff-only</code> 与
+          <code class="font-mono">docker compose up -d --build</code>。容器重建期间本页面会短暂断连，
+          回来后自动显示结果与日志。
+        </p>
+        <ul class="mt-2 text-xs text-gray-500 space-y-1 dark:text-gray-400">
+          <li>· 代码没有变化时会跳过重建，不会为了一个空更新等上十几分钟。</li>
+          <li>· 数据在命名卷里，重建容器不会丢账号与配置。</li>
+          <li>
+            · 最近心跳 {{ formatTime(store.dockerAgent?.heartbeatAt || 0) }}；心跳停了说明 updater
+            容器没在跑，用 <code class="font-mono">{{ store.agentEnableCommand }}</code> 拉起。
+          </li>
+        </ul>
+      </template>
+
+      <template v-else>
+        <p class="mb-2 text-xs text-gray-500 dark:text-gray-400">
+          容器里的代码与依赖都来自镜像，容器内改完会随重建消失。想在这个页面一键更新，先在宿主机项目目录启用更新助手：
+        </p>
+        <div class="flex items-start gap-2">
+          <pre class="min-w-0 flex-1 overflow-x-auto rounded bg-gray-900 px-3 py-2 text-xs text-gray-100"><code>{{ store.agentEnableCommand }}</code></pre>
+          <BaseButton variant="outline" size="sm" @click="copyText('agent', store.agentEnableCommand)">
+            {{ copied === 'agent' ? '已复制' : '复制' }}
+          </BaseButton>
+        </div>
+        <p class="mb-2 mt-3 text-xs text-gray-500 dark:text-gray-400">
+          不想让助手挂 docker.sock 也没问题，手动重建同样是这两步：
+        </p>
+        <div class="flex items-start gap-2">
+          <pre class="min-w-0 flex-1 overflow-x-auto rounded bg-gray-900 px-3 py-2 text-xs text-gray-100"><code>{{ store.deployCommand }}</code></pre>
+          <BaseButton variant="outline" size="sm" @click="copyText('manual', store.deployCommand)">
+            {{ copied === 'manual' ? '已复制' : '复制' }}
+          </BaseButton>
+        </div>
+        <p v-if="store.dockerAgent?.reason" class="mt-2 text-xs text-amber-600 dark:text-amber-400">
+          {{ store.dockerAgent.reason }}
+        </p>
+        <ul class="mt-2 text-xs text-gray-500 space-y-1 dark:text-gray-400">
+          <li>· 数据在命名卷里，重建容器不会丢账号与配置；不要加 <code class="font-mono">-v</code>。</li>
+          <li>· 构建时间取决于机型，ARM 设备通常比 x86 慢一倍以上。</li>
+          <li>· 重建完成后本页面会自动连上新版本，点「检查更新」可确认版本号已变化。</li>
+        </ul>
+      </template>
     </section>
 
     <!-- 待更新的提交 -->
@@ -408,8 +487,8 @@ onUnmounted(() => {
       </div>
     </section>
 
-    <!-- 历史版本 -->
-    <section class="farm-card rounded-lg p-4">
+    <!-- 历史版本：容器部署没有归档产物（镜像本身就是历史），回滚靠换镜像 tag / 重建，这一节不出现 -->
+    <section v-if="!store.isDocker" class="farm-card rounded-lg p-4">
       <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div>
           <h4 class="text-base text-gray-900 font-bold dark:text-gray-100">

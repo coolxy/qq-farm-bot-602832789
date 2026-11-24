@@ -116,6 +116,12 @@ export interface SystemUpdateStatus {
     remoteCheckError: string;
     /** 容器部署时给用户在宿主机执行的命令，前端直接展示成可复制文本。 */
     deployCommand: string;
+    /** 容器部署时在宿主机启用更新助手的命令。 */
+    agentEnableCommand: string;
+    /** 宿主机更新助手状态；非容器模式下 available 恒为 false。 */
+    dockerAgent: DockerUpdateAgentStatus;
+    /** 前端构建产物里记录的版本号（web/dist/version.json），版本号兜底用。 */
+    webBuild: number;
 }
 
 export interface SystemUpdateServiceOptions {
@@ -210,21 +216,31 @@ function readJobState(runtimeDir: string): PanelUpdateJobState | null {
 }
 
 /**
- * 作业「还在跑」的判定：状态写着 running，并且 pid 还活着。
+ * 作业「还在跑」的判定。
  *
- * 只看状态位是不够的——执行器被 kill -9 或者机器重启时状态文件永远停在 running，
- * 面板会一直显示「更新中」并且拒绝新任务。这里叠一层 pid 活性检查，顺便把尸检结果
- * 落回状态文件，让用户看到一条明确的失败原因，而不是无限转圈。
+ * 源码部署看 pid：执行器和后端在同一个进程空间，`kill -9` 之后 pid 立刻失效。
+ * 容器部署看心跳：执行器住在**另一个容器**里，它的 pid 在后端容器的命名空间里毫无意义
+ * （助手通常是 1，而后端容器里 pid 1 永远活着，照 pid 判会永远「进行中」）。
+ *
+ * 只看状态位是不够的——执行器被杀死或机器重启时状态文件永远停在 running，面板会一直
+ * 显示「更新中」并且拒绝新任务。所以这里必须叠一层活性检查，顺便把尸检结果落回状态
+ * 文件，让用户看到一条明确的失败原因，而不是无限转圈。
  */
-function readJobStateResolved(runtimeDir: string): PanelUpdateJobState | null {
+function readJobStateResolved(
+    runtimeDir: string,
+    liveness: { kind: 'pid' } | { kind: 'heartbeat', alive: boolean } = { kind: 'pid' },
+): PanelUpdateJobState | null {
     const job = readJobState(runtimeDir);
     if (!job || job.status !== 'running') return job;
-    if (isProcessAlive(job.pid as number)) return job;
+    if (liveness.kind === 'heartbeat' && liveness.alive) return job;
+    if (liveness.kind === 'pid' && isProcessAlive(job.pid as number)) return job;
     const interred: PanelUpdateJobState = {
         ...job,
         status: 'failed',
         phase: '任务已中断',
-        error: '更新进程已退出，但没有来得及写入结果（可能被强制结束或机器重启）。',
+        error: liveness.kind === 'heartbeat'
+            ? '宿主机更新助手已停止（心跳中断），这次更新没有跑完。检查 updater 容器是否还在运行。'
+            : '更新进程已退出，但没有来得及写入结果（可能被强制结束或机器重启）。',
         finishedAt: job.updatedAt || Date.now(),
     };
     try {
@@ -256,6 +272,49 @@ const VERSION_FILENAME = 'version.json';
 const DEFAULT_REMOTE_BRANCH = 'main';
 /** 容器重建命令：前端直接展示成可复制文本，用户贴到宿主机项目目录下就能用。 */
 const DOCKER_DEPLOY_COMMAND = 'git pull --ff-only && docker compose up -d --build';
+/**
+ * 启用宿主机更新助手的命令。
+ *
+ * updater 服务在 compose 里带 `profiles: ["update"]`，默认不启动 —— 它挂了 docker.sock，
+ * 相当于宿主机的 root 权限，这种能力不该在用户没同意的时候默认打开。
+ */
+const DOCKER_AGENT_ENABLE_COMMAND = 'docker compose --profile update up -d';
+
+/** 更新助手的心跳文件（写在数据卷里，容器重建后仍在）。 */
+const AGENT_HEARTBEAT_FILENAME = 'update-agent.json';
+/** 面板点「立即更新」时写下的请求，由助手领取。 */
+const AGENT_REQUEST_FILENAME = 'update-request.json';
+/**
+ * 心跳多久算过期。
+ *
+ * 助手每 5 秒写一次；`docker compose up -d --build` 期间它照样在写（构建是后台起、
+ * 前台循环刷心跳）。取 120 秒是为了容忍 NAS 上偶发的调度抖动与慢 IO —— 判死太急会
+ * 把正在构建的作业标成失败，用户会以为更新挂了。
+ */
+const AGENT_STALE_MS = 120000;
+
+/**
+ * 宿主机更新助手的状态。
+ *
+ * 容器里没有 git、没有 docker CLI，也不该在容器里改代码。所以「一键更新」这件事
+ * 交给一个**独立的轻量容器**：它挂着 docker.sock 与宿主机项目目录，面板点一下就把
+ * 请求写进数据卷，由它去 `git pull` + `docker compose up -d --build`。
+ * 这个结构是必需的——更新会把应用容器重建掉，同生共死的进程做不到「活着把自己换掉」。
+ */
+export interface DockerUpdateAgentStatus {
+    /** 心跳新鲜：助手在跑，面板可以发起一键更新。 */
+    available: boolean;
+    startedAt: number | null;
+    heartbeatAt: number | null;
+    /** 助手自报的项目目录（容器内视角），只用于诊断展示。 */
+    projectDir: string;
+    /** 协议版本，留给以后加字段时判断兼容性。 */
+    protocol: number;
+    heartbeatFile: string;
+    /** 不可用时的原因，直接当人话展示给用户。 */
+    reason: string;
+}
+
 
 /**
  * 把各种写法的仓库地址收敛成 `owner/repo`。
@@ -298,13 +357,23 @@ function resolveRemoteRepo(repoRoot: string, explicit?: string): string {
     return '';
 }
 
-/** 本地版本：读仓库根的 version.json（容器里同样存在，web 构建与面板版本都用它）。 */
-function readLocalVersion(repoRoot: string): { version: string, build: number } {
-    const data: any = layout.readJsonSafe(path.join(repoRoot, VERSION_FILENAME), {}) || {};
-    return {
-        version: String(data.version || '').trim(),
-        build: Number(data.build) || 0,
-    };
+/**
+ * 本地版本：优先仓库根的 `version.json`，读不到时退到 `web/dist/version.json`。
+ *
+ * 两条通道各有各的失效场景：根 `version.json` 要求镜像里真的拷了它（Dockerfile 曾经
+ * 漏拷，容器里「当前运行版本」就显示「未知」）；而前端构建产物是镜像里一定有的东西 ——
+ * 它本来就要发给浏览器。版本号是这一页最不该缺席的一行，所以两条都试。
+ */
+function readLocalVersion(repoRoot: string): { version: string, build: number, source: 'root' | 'web' | '' } {
+    const rootData: any = layout.readJsonSafe(path.join(repoRoot, VERSION_FILENAME), {}) || {};
+    const rootVersion = String(rootData.version || '').trim();
+    const rootBuild = Number(rootData.build) || 0;
+    if (rootVersion) return { version: rootVersion, build: rootBuild, source: 'root' };
+    const web = webBuildInfo.readWebBuildInfo(repoRoot);
+    if (web && web.appVersion) {
+        return { version: web.appVersion, build: web.appBuild || 0, source: 'web' };
+    }
+    return { version: '', build: 0, source: '' };
 }
 
 /**
@@ -359,6 +428,8 @@ function createSystemUpdateService(options: SystemUpdateServiceOptions = {}) {
     let remoteCheckedAt: number | null = null;
     let remoteCheckError = '';
     let opChain: Promise<any> = Promise.resolve();
+    /** 最近一次探测到的运行形态。作业活性判定要用它决定「看 pid 还是看心跳」。 */
+    let lastMode: SystemUpdateStatus['mode'] | null = null;
 
     /** 串行化「检查/拉取/发起更新」这类会互相踩的操作，避免并发点两次。 */
     function withOpMutex<T>(fn: () => Promise<T>): Promise<T> {
@@ -367,9 +438,84 @@ function createSystemUpdateService(options: SystemUpdateServiceOptions = {}) {
         return run;
     }
 
+    /**
+     * 读宿主机更新助手的心跳。
+     *
+     * 助手容器每 5 秒往数据卷里写一次 `update-agent.json`。文件在、心跳新，就说明
+     * 「宿主机那一侧有人能执行重建」；文件不在或心跳过期，就把原因原样交出去——
+     * 面板要能说清「为什么不能一键更新、怎么才能启用」，而不是给一个灰按钮。
+     */
+    function readDockerAgent(): DockerUpdateAgentStatus {
+        const heartbeatFile = path.join(runtimeDir, AGENT_HEARTBEAT_FILENAME);
+        const empty: DockerUpdateAgentStatus = {
+            available: false,
+            startedAt: null,
+            heartbeatAt: null,
+            projectDir: '',
+            protocol: 0,
+            heartbeatFile,
+            reason: '',
+        };
+        const raw: any = layout.readJsonSafe(heartbeatFile, null);
+        if (!raw || typeof raw !== 'object') {
+            return {
+                ...empty,
+                reason: `没有检测到宿主机更新助手。在宿主机项目目录执行 ${DOCKER_AGENT_ENABLE_COMMAND} 启用它，`
+                    + '之后这一页就能一键更新；不启用也可以按下面的命令手动重建。',
+            };
+        }
+        const heartbeatAt = Number(raw.heartbeatAt) || Number(raw.startedAt) || 0;
+        const startedAt = Number(raw.startedAt) || heartbeatAt || null;
+        const base: DockerUpdateAgentStatus = {
+            ...empty,
+            startedAt,
+            heartbeatAt: heartbeatAt || null,
+            projectDir: String(raw.projectDir || '').trim(),
+            protocol: Number(raw.protocol) || 0,
+        };
+        if (!heartbeatAt) {
+            return { ...base, reason: '更新助手的心跳文件不完整（缺少时间戳），请重启 updater 容器。' };
+        }
+        const age = now() - heartbeatAt;
+        if (age > AGENT_STALE_MS) {
+            const minutes = Math.max(1, Math.round(age / 60000));
+            return {
+                ...base,
+                reason: `更新助手已经 ${minutes} 分钟没有心跳，可能已经停止。检查一下 updater 容器（docker compose ps），`
+                    + `或用 ${DOCKER_AGENT_ENABLE_COMMAND} 重新拉起。`,
+            };
+        }
+        return { ...base, available: true, reason: '' };
+    }
+
+    /**
+     * 读作业状态，按运行形态选活性判据。
+     *
+     * 容器模式下助手运行在另一个容器里，pid 跨命名空间没有可比性，只能看心跳；
+     * 源码模式下仍然看 pid。这里不依赖「上一次 detectEnv 的结果」——面板刷新时
+     * 第一个请求可能就是 /job，那时候还没人探测过运行形态。
+     */
+    function readJobNow(): PanelUpdateJobState | null {
+        const mode = lastMode ?? detectMode();
+        const liveness = mode === 'docker'
+            ? { kind: 'heartbeat' as const, alive: readDockerAgent().available }
+            : { kind: 'pid' as const };
+        return readJobStateResolved(runtimeDir, liveness);
+    }
+
+    /** 运行形态：显式指定 > 打包 > 容器 > 源码。 */
+    function detectMode(): SystemUpdateStatus['mode'] {
+        if (options.mode) return options.mode;
+        if (isPackaged) return 'packaged';
+        return fs.existsSync('/.dockerenv') ? 'docker' : 'source';
+    }
+
     async function readStartupCommit(): Promise<string> {
         if (startupCommitReady) return startupCommit;
         startupCommitReady = true;
+        // 容器里没有 git，`execFile('git')` 只会换来一次 ENOENT。启动提交号本来就是给
+        // 源码部署判断「跑的是不是这份代码」用的，容器里不需要，直接跳过。
+        if (detectMode() === 'docker' || detectMode() === 'packaged') return '';
         try {
             startupCommit = (await execGit(repoRoot, ['rev-parse', 'HEAD'])).trim();
         }
@@ -380,13 +526,14 @@ function createSystemUpdateService(options: SystemUpdateServiceOptions = {}) {
     }
 
     async function detectEnv() {
-        const mode: SystemUpdateStatus['mode'] = options.mode
-            ? options.mode
-            : (isPackaged ? 'packaged' : (fs.existsSync('/.dockerenv') ? 'docker' : 'source'));
+        const mode: SystemUpdateStatus['mode'] = detectMode();
+        lastMode = mode;
         // 真正拉起的是 core/runtime/runner/ 下的稳定副本，不是工作树里的 tools/farm-release.mjs：
         // 回滚会 git reset，工作树里的执行器可能正在被删掉（详见 release-layout 的说明）。
-        layout.installStableRunner(repoRoot);
+        // 只有源码部署需要这份副本；容器里没有 tools/，写进去只是往数据卷里扔垃圾。
+        if (mode === 'source') layout.installStableRunner(repoRoot);
         const runnerPath = layout.locateRunner(repoRoot);
+        const agent = mode === 'docker' ? readDockerAgent() : null;
         let unsupportedReason = '';
         let applyUnsupportedReason = '';
 
@@ -394,12 +541,13 @@ function createSystemUpdateService(options: SystemUpdateServiceOptions = {}) {
             unsupportedReason = '当前是打包运行（单文件可执行），不包含 git 仓库，无法在线更新。';
         }
         else if (mode === 'docker') {
-            // 容器里没有 `.git`、没有 git 命令、也没有更新执行器——这三件事都是镜像结构决定的，
-            // 不是「部署坏了」。所以先按容器语义给出能执行的指引，不再把源码部署的诊断搬过来：
-            // 否则 NAS 用户会看到「没有找到 git 仓库（/app）」「缺少更新执行器」，两头都无从下手，
-            // 而真正该做的事（宿主机重建镜像）一个字都没提。
-            unsupportedReason = '当前运行在 Docker 容器内：版本由镜像决定，容器内不提供 git 更新。'
-                + `请在宿主机项目目录执行 ${DOCKER_DEPLOY_COMMAND} 重建容器。`;
+            // 容器里没有 `.git`、没有 git 命令——这是镜像结构决定的，不是「部署坏了」。
+            // 所以按容器语义说话：谁在宿主机上干活、面板能做什么，一句话讲清楚。
+            // 更新助手在跑时，容器内确实可以一键更新（由它去重建容器）。
+            unsupportedReason = agent && agent.available
+                ? '当前运行在 Docker 容器内：容器里没有 git，更新由宿主机更新助手执行（面板上的「立即更新」）。'
+                : '当前运行在 Docker 容器内：版本由镜像决定，容器内不提供 git 更新。'
+                    + `请在宿主机项目目录执行 ${DOCKER_DEPLOY_COMMAND} 重建容器。`;
         }
         else if (!fs.existsSync(path.join(repoRoot, '.git'))) {
             unsupportedReason = `没有找到 git 仓库（${repoRoot}），无法在线更新。`;
@@ -417,9 +565,9 @@ function createSystemUpdateService(options: SystemUpdateServiceOptions = {}) {
         }
 
         if (mode === 'docker') {
-            // 容器内重启进程只会把容器打死，代码改动也随容器重建消失；更新只能发生在宿主机。
-            // 这里不再去看执行器是否存在——那属于源码部署的判定，放在容器语境里只会误导。
-            applyUnsupportedReason = `容器内部无法重启自身，也不该在容器里改代码：请在宿主机项目目录执行 ${DOCKER_DEPLOY_COMMAND}。`;
+            // 容器内重启进程只会把容器打死，代码改动也随容器重建消失；真正的重建只能发生在
+            // 宿主机。助手在跑就把这条路由让给它，不在就跑不通——两种情况如实写进原因里。
+            applyUnsupportedReason = agent && agent.available ? '' : (agent?.reason || '未启用宿主机更新助手');
         }
         else if (!fs.existsSync(runnerPath)) {
             applyUnsupportedReason = '缺少更新执行器（tools/farm-release.mjs），拉取代码后需要手动重启服务。';
@@ -432,7 +580,11 @@ function createSystemUpdateService(options: SystemUpdateServiceOptions = {}) {
             releasesDir,
             gitSupported,
             unsupportedReason,
-            applySupported: gitSupported && !applyUnsupportedReason,
+            // 「能不能从面板发起更新」不再等同于「有没有 git」：容器里挂上更新助手之后，
+            // 点按钮同样能完成更新（由宿主机那侧重建镜像），只是执行者换了个人。
+            applySupported: mode === 'docker'
+                ? Boolean(agent && agent.available)
+                : (gitSupported && !applyUnsupportedReason),
             applyUnsupportedReason,
             runnerPath,
         };
@@ -604,10 +756,13 @@ function createSystemUpdateService(options: SystemUpdateServiceOptions = {}) {
         const envInfo = await detectEnv();
         const startup = await readStartupCommit();
         const snapshot = releaseStore.listReleases({ repoRoot, releasesDir });
-        const job = readJobStateResolved(runtimeDir);
-        const jobBusy = Boolean(job && job.status === 'running') || isDeployLockAlive(runtimeDir);
+        const job = readJobNow();
+        const jobBusy = Boolean(job && job.status === 'running')
+            // 发布互斥锁是源码部署的执行器写的；容器里没有这号东西，别看它。
+            || (envInfo.mode !== 'docker' && isDeployLockAlive(runtimeDir));
         const webInfo = webBuildInfo.readWebBuildInfo(repoRoot);
         const local = readLocalVersion(repoRoot);
+        const agent = readDockerAgent();
 
         const base: SystemUpdateStatus = {
             mode: envInfo.mode,
@@ -634,7 +789,8 @@ function createSystemUpdateService(options: SystemUpdateServiceOptions = {}) {
             // 照样能回答「有没有新版本」。能不能拉取/应用仍然是 git 部署独有的。
             canCheck: !envInfo.gitSupported,
             canPull: false,
-            canApply: false,
+            // 容器部署下「能不能更新」由助手在不在决定，其它模式在下面按 git 状态收紧。
+            canApply: envInfo.mode === 'docker' ? (envInfo.applySupported && !jobBusy) : false,
             jobBusy,
             lastCheckedAt,
             lastCheckError,
@@ -644,6 +800,7 @@ function createSystemUpdateService(options: SystemUpdateServiceOptions = {}) {
             releasesSummary: snapshot.summary,
             webBuildId: webInfo?.buildId || '',
             webVersion: webInfo?.appVersion || snapshot.summary.activeVersion,
+            webBuild: webInfo?.appBuild || 0,
             localVersion: local.version,
             localBuild: local.build,
             remoteVersion,
@@ -651,6 +808,8 @@ function createSystemUpdateService(options: SystemUpdateServiceOptions = {}) {
             remoteCheckedAt,
             remoteCheckError,
             deployCommand: envInfo.mode === 'docker' ? DOCKER_DEPLOY_COMMAND : '',
+            agentEnableCommand: envInfo.mode === 'docker' ? DOCKER_AGENT_ENABLE_COMMAND : '',
+            dockerAgent: agent,
         };
 
         if (!envInfo.gitSupported) return base;
@@ -813,18 +972,84 @@ function createSystemUpdateService(options: SystemUpdateServiceOptions = {}) {
     }
 
     function assertNotBusy(): void {
-        const job = readJobStateResolved(runtimeDir);
+        const job = readJobNow();
         if (job && job.status === 'running') {
             throw createUpdateError('已有更新任务正在运行，请等待结束后再操作。', 409, 'UPDATE_BUSY');
         }
-        if (isDeployLockAlive(runtimeDir)) {
+        if (lastMode !== 'docker' && isDeployLockAlive(runtimeDir)) {
             throw createUpdateError('已有发布任务正在运行，请稍后再试。', 409, 'UPDATE_BUSY');
         }
+    }
+
+    /**
+     * 容器部署的一键更新：写请求，剩下的交给宿主机更新助手。
+     *
+     * 为什么不在容器里干活：要重建的正是这个容器自己，而且镜像只能由宿主机那侧的
+     * docker daemon 构建。后端在这里的职责只有两件事——确认「有人能干活」，以及把
+     * 「要干什么」写进两个容器都能看到的数据卷里。作业状态由助手往同一个目录写，
+     * 所以容器被重建之后，新起来的后端照样能把这个作业的进度和日志读出来。
+     */
+    async function applyDockerUpdate() {
+        const agent = readDockerAgent();
+        if (!agent.available) {
+            throw createUpdateError(agent.reason || '未检测到宿主机更新助手，无法一键更新。', 400, 'DOCKER_AGENT_UNAVAILABLE');
+        }
+        assertNotBusy();
+
+        // 现场再确认一次远端：一来面板能显示「从 vA 到 vB」，二来挡掉「已经是最新还去重建镜像」
+        // 这种纯浪费（NAS 上重建一次往往是几分钟）。
+        const local = readLocalVersion(repoRoot);
+        let target: RemoteVersionInfo | null = remoteVersion;
+        try {
+            target = await fetchRemoteVersion();
+            remoteVersion = target;
+            remoteCheckError = '';
+        }
+        catch (err: any) {
+            // 容器这一侧网络不通不该挡住更新——宿主机那边可能走的是另一条网络/代理。
+            // 有上次的缓存就接着用，没有就留空，交给助手拉完代码自己判断有没有变化。
+            remoteCheckError = String(err?.message || err || '检查远端版本失败');
+        }
+        remoteCheckedAt = now();
+        if (target && !isRemoteNewer(target, local)) {
+            throw createUpdateError(`远端已是最新（v${target.version}），不需要更新。`, 400, 'NOTHING_TO_APPLY');
+        }
+
+        const requestId = `docker_${crypto.randomUUID().slice(0, 8)}`;
+        const startedAt = now();
+        const request = {
+            id: requestId,
+            requestedAt: startedAt,
+            fromVersion: local.version,
+            fromBuild: local.build,
+            targetVersion: target?.version || '',
+            targetBuild: target?.build || 0,
+        };
+        fs.mkdirSync(runtimeDir, { recursive: true });
+        layout.writeJsonAtomic(path.join(runtimeDir, AGENT_REQUEST_FILENAME), request);
+
+        // 先摆一条 running 的作业：助手第一跳最多要等 3 秒，面板不该在这几秒里显示「什么都没发生」。
+        // `origin: 'app'` 让助手知道这是「待领取」的占位，不是已经处理过的结果。
+        const placeholder: PanelUpdateJobState = {
+            id: requestId,
+            action: 'update',
+            status: 'running',
+            phase: '已交给宿主机更新助手',
+            detail: '',
+            startedAt,
+            updatedAt: startedAt,
+            fromCommit: local.version ? `v${local.version}` : '',
+            targetCommit: target?.version ? `v${target.version}` : '',
+            recentLines: ['[更新] 已请求宿主机更新助手：拉取代码并重建容器…'],
+        };
+        layout.writeJsonAtomic(jobFilePath(), { ...placeholder, origin: 'app', requestId } as any);
+        return { job: placeholder, status: await getStatus() };
     }
 
     const applyUpdate = (applyOptions: { pullFirst?: boolean } = {}) => withOpMutex(async () => {
         await readStartupCommit();
         const envInfo = await detectEnv();
+        if (envInfo.mode === 'docker') return applyDockerUpdate();
         if (!envInfo.gitSupported) {
             throw createUpdateError(envInfo.unsupportedReason || '当前运行方式不支持更新', 400, 'UNSUPPORTED_ENVIRONMENT');
         }
@@ -996,7 +1221,7 @@ function createSystemUpdateService(options: SystemUpdateServiceOptions = {}) {
         applyUpdate,
         rollback,
         deleteReleases,
-        readJob: () => readJobStateResolved(runtimeDir),
+        readJob: () => readJobNow(),
         readJobLog,
     };
 }

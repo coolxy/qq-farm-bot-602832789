@@ -131,7 +131,8 @@
 | --- | --- | --- |
 | 源码 + git + `start.sh` 启动 | ✅ | ✅ |
 | 源码 + git，手动 `node client.js` 启动 | ✅ | ⚠️ 能跑，但停服退回直接杀进程，宿主子进程可能残留 |
-| Docker 容器 | ✅ | ❌ 容器内重启自身等于打死容器，请拉取后重建镜像 |
+| Docker 容器 + 更新助手（updater 服务） | ✅ | ✅ 由助手在宿主机拉代码并重建容器 |
+| Docker 容器，未启用助手 | ✅（读远端 `version.json`） | ❌ 容器内重启自身等于打死容器，请在宿主机重建 |
 | 单文件打包（pkg） | ❌ | ❌ |
 
 其他限制：
@@ -140,6 +141,41 @@
 - 更新会重启服务，**游戏连接会断**。免扫码续期能不能接上取决于授权还有效；`code` 已失效的账号需要重新扫码。
 - 重启由 `start.sh` 负责，所以**不要用 systemd / pm2 之类的外部守护**同时管这个进程，否则杀掉后会和外部的自动重启打架。
 - 归档不包含 `core/src`：源码交给 git，产物交给归档，两边各管一摊。
+
+## 8.1 容器部署的一键更新：updater 助手
+
+容器里既没有 `.git` 也没有 git 命令，更不该在容器里改代码（改动会随重建消失）。所以容器部署的一键更新交给一个**独立的轻量容器**：它挂着 `docker.sock` 与项目目录，收到面板的请求就去 `git pull` + `docker compose up -d --build`。
+
+为什么不能是应用容器里的一个子进程：要重建的正是应用容器自己。同一个容器里的进程会在 `docker stop` 那一刻一起被杀，更新只做一半——这是「容器里更新到一半服务就没了」这类事故的根因。
+
+```
+面板点「立即更新」
+   → 后端写 core/data/runtime/update-request.json（数据卷）
+   → updater 轮询到请求，git pull --ff-only
+   → docker compose up -d --build（宿主机 daemon 干活）
+   → 应用容器被重建；作业状态/日志一直写在数据卷里，新容器起来后接着读
+   → 面板恢复连接，显示结果与完整日志
+```
+
+启用（默认不开，因为它挂了 `docker.sock`，等于宿主机 root 权限）：
+
+```bash
+cd <宿主机项目目录>
+docker compose --profile update up -d          # 起 updater
+# 之后面板「版本与更新」里的「立即更新」就可用了
+docker compose --profile update rm -sf updater # 不想要了就收掉
+```
+
+也可以把 `COMPOSE_PROFILES=update` 写进 `.env`，之后普通的 `docker compose up -d` 就会带上它。
+
+几个实现细节，出问题时能对上：
+
+- **通信只靠数据卷**。`update-request.json`（应用→助手）、`update-job.json` / `update-job.log`（助手→应用）、`update-agent.json`（助手心跳）。文件名两边必须一致，测试逐条比对。
+- **作业活性的判据是心跳，不是 pid**。助手在另一个容器里，它的 pid 在后端命名空间毫无意义（通常是 1，永远「活着」）。心跳 120 秒没更新才判死。
+- **compose project 名从自身容器 label 读**，不猜目录名。猜错会另起一套容器，还会撞 `container_name`。
+- **代码没变化就跳过重建**。NAS 上重建一次镜像几分钟起，为一个空更新等一轮不划算。
+- **应用容器要把 runtime 放在数据卷里**（compose 已设 `FARM_RUNTIME_DIR=/app/core/data/runtime`），否则容器一重建，「更新进行到哪了」就没了。
+- 私密仓库需要令牌：`UPDATE_GIT_TOKEN` 写进 `.env`。公开仓库不用管，助手会用匿名 HTTPS 拉取，`GIT_TERMINAL_PROMPT=0` 保证需要凭据时直接失败而不是卡住。
 
 ## 9. 排障
 
@@ -152,6 +188,10 @@
 | 回滚报「有未推送的本地提交」 | `git log @{u}..HEAD`，推上去或 `git reset --hard @{u}` 再来 |
 | 归档占用太大 | 面板里删单个版本，或调小 `FARM_RELEASES_KEEP`，或点「清理孤儿」 |
 | 回滚到很老的版本后，服务停了没起来 | 用稳定副本手动拉起：`node core/runtime/runner/farm-release.mjs rollback --release <id>` |
+| 容器部署：显示「未启用」更新助手 | `docker compose ps` 看 `qq-farm-bot-updater` 在不在；没有就 `docker compose --profile update up -d` |
+| 容器部署：点更新后一直「进行中」 | 助手心跳断了（`core/data/runtime/update-agent.json` 很久没更新）；先看 updater 容器日志 `docker logs --tail 50 qq-farm-bot-updater` |
+| 容器部署：更新卡在「正在拉取代码」 | 私有仓库没凭据。看 `update-job.log` 末尾；需要的话在 `.env` 里加 `UPDATE_GIT_TOKEN` |
+| 容器部署：当前运行版本显示「未知」 | 老镜像的 Dockerfile 运行阶段没拷 `version.json`；后端会退到 `web/dist/version.json`，升级到本版后不再出现 |
 
 手工排查命令：
 

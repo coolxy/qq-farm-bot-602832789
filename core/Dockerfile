@@ -106,6 +106,12 @@ COPY --from=core-builder /app/core/src/utils/tsdk.wasm ./src/utils/tsdk.wasm
 COPY --from=core-builder /app/core/src/utils/tsdk-wx.wasm ./src/utils/tsdk-wx.wasm
 COPY --from=web-builder /app/web/dist ../web/dist
 
+# 根 version.json 必须进镜像：设置页「当前运行版本」读的就是它。
+# 以前只在 web-builder 阶段拷过（给 vite 注入版本号用），运行阶段缺这个文件，
+# 于是容器里「版本与更新」显示成「未知」——最该看到版本号的地方反而没有。
+# 放最后一行：版本号每次更新都变，放早了会让下面所有层缓存全部失效。
+COPY --from=web-builder /app/version.json ../version.json
+
 RUN chmod -R 755 data
 
 VOLUME ["/app/core/data"]

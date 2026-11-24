@@ -30,6 +30,10 @@ services:
       - TZ=${TZ:-Asia/Shanghai}
       - NODE_ENV=production
       - ADMIN_PORT=3007
+      # 更新作业的状态/日志落在数据卷里，而不是容器的可写层：
+      # 一键更新会重建这个容器，写在容器里的进度会随之消失；放卷里则新容器起来后
+      # 能接着把进度、日志和结论读出来，「更新完就看不到结果」这件事不会发生。
+      - FARM_RUNTIME_DIR=/app/core/data/runtime
     healthcheck:
       # 用容器自带的 node 发请求，不用 wget：alpine 的 busybox wget 解析 localhost
       # 时会先试 ::1，而应用只监听 IPv4 的 0.0.0.0，可能直接连接被拒 → 容器一直挂
@@ -39,6 +43,53 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # 宿主机更新助手：让面板上的「立即更新」在容器部署下也能用。
+  #
+  # 为什么必须是独立容器：更新要重建的正是 qq-farm-bot 这个容器自己。放在应用容器
+  # 里当子进程，会在 docker stop 的那一刻一起被杀，更新只做一半；放在这里，它是
+  # 「活着把自己换掉」的那一方。它只需要三样东西：docker.sock（指挥宿主机 daemon）、
+  # 项目目录（git pull）、数据卷（和面板交换请求与进度）。
+  #
+  # 默认不启动，用 profiles 门控：挂 docker.sock 等于把宿主机 root 权限交出去，
+  # 这种能力必须由用户显式打开，不能靠默认值替他决定。
+  #   docker compose --profile update up -d      # 启用（之后面板即可一键更新）
+  #   docker compose --profile update rm -sf updater   # 关掉
+  # 也可以在 .env 里写 COMPOSE_PROFILES=update，之后普通的 up -d 就会带上它。
+  #
+  # 镜像用全限定名，理由同 NODE_IMAGE：短名会走 registry mirror，国内 NAS 上常见 401。
+  # 换源：UPDATER_IMAGE=docker.io/library/docker:27-cli docker compose --profile update up -d
+  updater:
+    image: ${UPDATER_IMAGE:-docker.m.daocloud.io/library/docker:27-cli}
+    container_name: qq-farm-bot-updater
+    restart: unless-stopped
+    # 和应用容器一样让 tini 当 PID 1：否则 `docker stop` 要等满 10 秒再 SIGKILL，
+    # 打断正在跑的 git pull / 构建。
+    init: true
+    profiles: ["update"]
+    working_dir: /project
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # 项目目录：git pull 改的是宿主机这份源码，重建用的也是这份 compose 文件。
+      - .:/project
+      # 和应用共用数据卷，只为了交换 update-request / update-job / 心跳
+      - qq-farm-data:/data
+    environment:
+      - TZ=${TZ:-Asia/Shanghai}
+      - UPDATE_PROJECT_DIR=/project
+      - UPDATE_DATA_DIR=/data
+      - UPDATE_POLL_SECONDS=${UPDATE_POLL_SECONDS:-3}
+      # 私密仓库才需要；公开仓库留空即可。用令牌时请同时在宿主机 `git remote`
+      # 保持 https 形式，脚本会用它拼一次性认证 URL，不写进 .git/config。
+      - UPDATE_GIT_TOKEN=${UPDATE_GIT_TOKEN:-}
+    # 先把脚本复制到 /tmp 再执行：更新会改写项目目录，直接跑被改写的脚本
+    # 会让正在执行的 sh 读到半截内容（边读边执行）。
+    entrypoint: ["/bin/sh", "-c", "cp /project/scripts/docker-update-agent.sh /tmp/update-agent.sh && exec /bin/sh /tmp/update-agent.sh"]
     logging:
       driver: "json-file"
       options:

@@ -850,3 +850,195 @@ test('源码部署：没有 .git 时仍按源码语义报「没有找到 git 仓
         cleanup(root);
     }
 });
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * Docker 部署的「当前版本」与「一键更新」。
+ *
+ * 两个真实缺陷：
+ *   1. 面板「当前运行版本」显示「未知」。原因是镜像运行阶段漏拷 version.json，
+ *      而 releases 归档在容器里本来就是空的 —— 两条来源同时断，只剩一个「未知」。
+ *   2. 容器部署只能给一句「请去宿主机执行命令」。有更新助手（独立容器）时，
+ *      面板点一下就该能更新；没有时要说清怎么启用，而不是给个灰按钮。
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** 造一份更新助手心跳，模拟 updater 容器正在跑。 */
+function writeAgentHeartbeat(runtimeDir, overrides = {}) {
+    fs.mkdirSync(runtimeDir, { recursive: true });
+    const now = Date.now();
+    fs.writeFileSync(path.join(runtimeDir, 'update-agent.json'), JSON.stringify({
+        protocol: 1,
+        pid: 1,
+        startedAt: now,
+        heartbeatAt: now,
+        projectDir: '/project',
+        ...overrides,
+    }), 'utf8');
+}
+
+test('Docker 部署：根 version.json 缺失时退到前端构建产物里的版本', async () => {
+    // 复现线上现象：镜像运行阶段没有 /app/version.json（Dockerfile 曾经只在 web 构建
+    // 阶段拷过），而容器里永远没有 releases 归档，面板于是显示「未知」。
+    const { service, root } = makeDockerService();
+    try {
+        fs.rmSync(path.join(root, 'version.json'));
+        fs.mkdirSync(path.join(root, 'web', 'dist'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'web', 'dist', 'version.json'), JSON.stringify({
+            buildId: '3.36.3-256-1795523799367',
+            appVersion: '3.36.3',
+            appBuild: 256,
+            builtAt: 1795523799367,
+        }), 'utf8');
+
+        const status = await service.getStatus();
+        assert.equal(status.localVersion, '3.36.3', '前端产物里有版本号，就不该显示「未知」');
+        assert.equal(status.localBuild, 256);
+        assert.equal(status.webVersion, '3.36.3');
+        assert.equal(status.webBuild, 256);
+    }
+    finally {
+        cleanup(root);
+    }
+});
+
+test('Docker 部署：没有更新助手时不能一键更新，但给出启用命令', async () => {
+    const { service, root } = makeDockerService();
+    try {
+        const status = await service.getStatus();
+        assert.equal(status.applySupported, false, '助手不在，面板不能假装能更新');
+        assert.equal(status.canApply, false);
+        assert.equal(status.dockerAgent.available, false);
+        assert.match(status.dockerAgent.reason, /docker compose --profile update up -d/, '要说清怎么启用');
+        assert.equal(status.agentEnableCommand, 'docker compose --profile update up -d');
+        assert.equal(status.applyUnsupportedReason, status.dockerAgent.reason, '禁用原因直接用人话');
+        assert.equal(status.deployCommand, 'git pull --ff-only && docker compose up -d --build', '手动命令仍然保留');
+    }
+    finally {
+        cleanup(root);
+    }
+});
+
+test('Docker 部署：助手心跳新鲜时面板可以一键更新', async () => {
+    const { service, root } = makeDockerService();
+    try {
+        writeAgentHeartbeat(path.join(root, 'runtime'));
+        const status = await service.getStatus();
+        assert.equal(status.dockerAgent.available, true);
+        assert.equal(status.dockerAgent.projectDir, '/project');
+        assert.equal(status.applySupported, true);
+        assert.equal(status.canApply, true);
+        assert.equal(status.applyUnsupportedReason, '', '能更新就不该留禁用原因');
+    }
+    finally {
+        cleanup(root);
+    }
+});
+
+test('Docker 部署：心跳过期等于助手已停止', async () => {
+    const { service, root } = makeDockerService();
+    try {
+        // 5 分钟没心跳：判死阈值是 120 秒
+        writeAgentHeartbeat(path.join(root, 'runtime'), { heartbeatAt: Date.now() - 300000 });
+        const status = await service.getStatus();
+        assert.equal(status.dockerAgent.available, false);
+        assert.match(status.dockerAgent.reason, /没有心跳|已经 \d+ 分钟/);
+        assert.equal(status.canApply, false);
+    }
+    finally {
+        cleanup(root);
+    }
+});
+
+test('Docker 部署：点立即更新会写下请求与占位作业', async () => {
+    const { service, root } = makeDockerService({
+        fetchImpl: async () => new Response(JSON.stringify({
+            version: '3.37.0',
+            build: 260,
+            history: [{ version: '3.37.0', build: 260, summary: '新版本' }],
+        }), { status: 200 }),
+    });
+    try {
+        const runtime = path.join(root, 'runtime');
+        writeAgentHeartbeat(runtime);
+        const result = await service.applyUpdate();
+
+        assert.equal(result.job.status, 'running', '面板要立刻看到一条 running 的作业');
+        assert.equal(result.job.fromCommit, 'v3.36.2');
+        assert.equal(result.job.targetCommit, 'v3.37.0');
+        assert.equal(result.status.job.status, 'running');
+
+        const request = JSON.parse(fs.readFileSync(path.join(runtime, 'update-request.json'), 'utf8'));
+        assert.match(request.id, /^docker_[0-9a-f]{8}$/, '请求号要能对上作业');
+        assert.equal(request.fromVersion, '3.36.2');
+        assert.equal(request.targetVersion, '3.37.0');
+        assert.equal(request.targetBuild, 260);
+
+        const job = JSON.parse(fs.readFileSync(path.join(runtime, 'update-job.json'), 'utf8'));
+        assert.equal(job.origin, 'app', '助手靠 origin 区分「占位」与「自己写的结果」');
+        assert.equal(job.requestId, request.id);
+    }
+    finally {
+        cleanup(root);
+    }
+});
+
+test('Docker 部署：助手不在 / 远端没新版本 时都拒绝发起更新', async () => {
+    const noAgent = makeDockerService({
+        fetchImpl: async () => new Response(JSON.stringify({ version: '3.38.0', build: 300 }), { status: 200 }),
+    });
+    try {
+        await assert.rejects(
+            () => noAgent.service.applyUpdate(),
+            (err) => err.code === 'DOCKER_AGENT_UNAVAILABLE',
+            '没有助手就不能发起更新',
+        );
+    }
+    finally {
+        cleanup(noAgent.root);
+    }
+
+    const sameVersion = makeDockerService();
+    try {
+        writeAgentHeartbeat(path.join(sameVersion.root, 'runtime'));
+        await assert.rejects(
+            () => sameVersion.service.applyUpdate(),
+            (err) => err.code === 'NOTHING_TO_APPLY',
+            '远端和本地一样就不该让 NAS 白重建一次镜像',
+        );
+        assert.ok(!fs.existsSync(path.join(sameVersion.root, 'runtime', 'update-request.json')), '拒绝时不该留下请求文件');
+    }
+    finally {
+        cleanup(sameVersion.root);
+    }
+});
+
+test('Docker 部署：作业挂在 running 但助手心跳没了，判定为中断而不是一直转圈', async () => {
+    const { service, root } = makeDockerService();
+    try {
+        const runtime = path.join(root, 'runtime');
+        fs.mkdirSync(runtime, { recursive: true });
+        fs.writeFileSync(path.join(runtime, 'update-job.json'), JSON.stringify({
+            id: 'docker_dead0001',
+            requestId: 'docker_dead0001',
+            origin: 'agent',
+            action: 'update',
+            // 助手在别的容器里，它的 pid 在后端命名空间里毫无意义（通常是 1，永远存在）
+            pid: 1,
+            status: 'running',
+            phase: '正在重建镜像',
+            startedAt: Date.now() - 60000,
+            updatedAt: Date.now() - 60000,
+            recentLines: [],
+        }), 'utf8');
+
+        const status = await service.getStatus();
+        assert.equal(status.job.status, 'failed', '心跳没了就不能还显示进行中');
+        assert.match(status.job.error, /更新助手已停止/);
+        assert.equal(status.canApply, false, '中断的作业不该继续占着「可更新」状态');
+        // 尸检结果要落盘，否则刷新页面又变回 running
+        const persisted = JSON.parse(fs.readFileSync(path.join(runtime, 'update-job.json'), 'utf8'));
+        assert.equal(persisted.status, 'failed');
+    }
+    finally {
+        cleanup(root);
+    }
+});
