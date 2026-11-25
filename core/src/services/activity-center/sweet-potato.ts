@@ -115,7 +115,7 @@ function createSweetPotatoService(deps: any) {
         };
     }
     const selfGid = (): string => {
-        const state = deps.getUserState ? deps.getUserState() : require('../utils/network').getUserState();
+        const state = deps.getUserState ? deps.getUserState() : require('../../utils/network').getUserState();
         const gid = String(state?.gid || '');
         return /^[1-9]\d{0,15}$/.test(gid) ? gid : '';
     };

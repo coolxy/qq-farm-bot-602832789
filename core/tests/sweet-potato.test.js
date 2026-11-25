@@ -835,6 +835,28 @@ test('sweet potato 刷新行情: cmd 92 查自己，回带剩余接收额度', a
     assert.match(result.message, /今日还可收 40/);
 });
 
+// selfGid() 在不注入 getUserState 时走懒加载 require。sweet-potato.ts 在
+// services/activity-center/ 子目录里，路径必须是 '../../utils/network'；写成
+// '../utils/network' 会在运行时抛 MODULE_NOT_FOUND，且错误信息被当成活动错误码
+// 透给前端，页面只显示「活动操作失败」，极难定位。这条测试钉住懒加载路径。
+test('sweet potato: 未注入 getUserState 时懒加载 require 路径可解析', async () => {
+    const types = await loadTypes();
+    const deps = buildDeps({ types, calls: [], shop: { remaining: 40 } });
+    delete deps.getUserState;
+    const service = createSweetPotatoService(deps);
+    // 测试环境里 network 模块没有登录态，getUserState() 返回空 gid，
+    // 于是 refreshSweetPotatoQuote() 应该抛 SWEET_POTATO_INACTIVE。
+    // 路径写错时会变成 MODULE_NOT_FOUND —— 那才是要拦截的回归。
+    await assert.rejects(
+        () => service.refreshSweetPotatoQuote(),
+        (error) => {
+            assert.doesNotMatch(String(error?.code || ''), /MODULE_NOT_FOUND/);
+            assert.doesNotMatch(String(error?.message || ''), /Cannot find module/);
+            return true;
+        },
+    );
+});
+
 test('sweet potato: 兑换目录只有序号与价格都对上才标 itemIdMatched', async () => {
     const types = await loadTypes();
     const service = createSweetPotatoService(buildDeps({

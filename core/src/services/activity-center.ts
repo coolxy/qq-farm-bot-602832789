@@ -5,7 +5,7 @@ import shareRewardInstances from '../activity-data/share-reward-instances.json';
 import pendingContent from '../activity-data/pending-content.json';
 
 const LongModule = require('long');
-const { sendMsgAsync, GatewayError } = require('../utils/network');
+const { sendMsgAsync, GatewayError, getUserState } = require('../utils/network');
 const { types } = require('../utils/proto');
 const { getItemById, getItemImageById, getEffectiveSellInfo, getMutantEffectsByIds } = require('../config/gameConfig');
 const { getServerTimeSec, getSystemDateKey } = require('../utils/utils');
@@ -425,6 +425,9 @@ const sweetPotatoService = createSweetPotatoService({
     types, sendMsgAsync, getBag, getBagItems, getServerTimeSec, itemDto,
     int64String, int64Number, businessError, positiveDecimal,
     serializeMutation, getActivityCenterSnapshot,
+    // 显式注入，别让 selfGid() 走懒加载 require —— 那层路径在子目录里极易写错，
+    // 而且一旦写错只会在调用时才抛 MODULE_NOT_FOUND，主流程很难提前发现。
+    getUserState,
 });
 
 async function buildActivityCenterSnapshot(shopOverride: any = null) {

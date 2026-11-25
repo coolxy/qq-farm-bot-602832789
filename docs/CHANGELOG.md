@@ -15,8 +15,9 @@
 
 | 版本 | 更新序号 | 日期 | 更新内容 | 提交 |
 | --- | --- | --- | --- | --- |
+| v3.39.2 | #269 | 2026-11-26 | 修复以薯换福 selfGid 懒加载 require 路径错误导致行情刷新报 MODULE_NOT_FOUND | `682d6905` |
 | v3.39.1 | #268 | 2026-11-26 | 修复分享确认失败后冷却结束会重发 cmd 98 | `b75bb5e2` |
-| v3.39.0 | #267 | 2026-11-26 | 移植 li 版以薯换福运行时方案，同步协议与游戏客户端版本 | `0d2daeaa` |
+| v3.39.0 | #267 | 2026-11-26 | 移植 li 版以薯换福运行时方案，同步协议与游戏客户端版本 | `b75bb5e2` |
 | v3.38.0 | #266 | 2026-11-25 | 新增以薯换福收购记录与自动比价卖薯，补齐上一轮遗留项 | — |
 | v3.37.1 | #265 | 2026-11-25 | 修复以薯换福兑换协议与自家铺子额度，补上提成领取 | — |
 | v3.37.0 | #263 | 2026-11-25 | 新增以薯换福完整闭环：种植、出售、分享与兑换商店 | — |
@@ -256,6 +257,18 @@ flowchart TB
 ```
 
 ## 详细记录
+
+### 2026-11-26 · v3.39.2（#269） · 修复以薯换福 selfGid 懒加载 require 路径错误
+
+v3.39.0 新增的「刷新我的行情」接口上线后一点就报「活动操作失败，请刷新页面后重试」，错误码 `MODULE_NOT_FOUND`。根因是 `sweet-potato.ts` 放在 `services/activity-center/` 子目录里，`selfGid()` 的懒加载回退路径写成了 `require('../utils/network')`——从该文件出发会解析到并不存在的 `services/utils/network`。
+
+这条 fallback 平时走不到：`getSweetPotatoActivity` 等主路径在测试与生产里都由 `deps.getUserState` 注入，只有新增的 `refreshSweetPotatoQuote()` 在部分调用面里没拿到注入值，才第一次真正执行到懒加载分支。而抛出的 `MODULE_NOT_FOUND` 又被 `error-handler.ts` 当成协议错误码原样透出（`error.code` 直接当 `protocolCode`），前端只看到一句笼统的「活动操作失败」，真实原因完全不可见。
+
+- `sweet-potato.ts` 的懒加载路径改成 `require('../../utils/network')`。
+- `activity-center.ts` 实例化时**显式注入 `getUserState`**，不再依赖子目录里的懒加载路径。这层路径写错只会在调用时炸，主流程很难提前发现，注入是最省事的止损。
+- `core/tests/sweet-potato.test.js` 33 → 34 条：新增一条「不注入 `getUserState` 时懒加载路径可解析」，断言抛出的错不是 `MODULE_NOT_FOUND` / `Cannot find module`。原有用例都注入了 `getUserState`，所以此前没能拦住这个回归。
+- 实测 `POST /api/activity-center/sweet-potato/quote/refresh` 返回真实行情（今日收购价 230 = 基础 164 + 暴击 66，今日还可收 8000，`canSell=true`）。core 1099 条全绿。
+- **顺带发现的运行环境问题**：重启服务时 QQ 账号「神拽」用 `1.17.1.10_20261117` 连接被网关回 400（`Unexpected server response: 400`），与 v3.39.0 风险提示一致。微信账号「神拽°」正常登录。QQ 端如需回退版本号，见 v3.39.0 记录里的回退说明。
 
 ### 2026-11-25 · v3.39.1（#268） · 修复分享确认失败后冷却结束会重发 cmd 98
 
