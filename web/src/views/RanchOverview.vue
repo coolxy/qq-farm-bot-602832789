@@ -12,7 +12,7 @@ import { getPlatformLabel, useAccountStore } from '@/stores/account'
 import { useRanchStore } from '@/stores/ranch'
 import { useStatusStore } from '@/stores/status'
 import { formatCouponAmount, formatGoldAmount } from '@/utils/number-format'
-import { ranchActionIcons, ranchActionLabels, ranchTodayOperations } from '@/utils/ranch-display'
+import { ranchActionIcons, ranchTodayOperations } from '@/utils/ranch-display'
 
 const accountStore = useAccountStore()
 const { currentAccountId, currentAccount } = storeToRefs(accountStore)
@@ -166,20 +166,28 @@ const todayKey = computed(() => {
 
 const todayExpGained = computed(() => Math.max(0, Number(status.value?.sessionExpGained) || 0))
 const todayOperations = computed(() => ranchTodayOperations(state.value?.operations, state.value?.operationsDate, todayKey.value))
-const operationEntries = computed(() => Object.entries(todayOperations.value).filter(([, count]) => Number(count) > 0))
 
-/* ── 今日统计瓦片：先资源今日增减（金券/松果/便便），再固定动作计数（偷取/出售/蚊子/清理），
-   其余动作有记录才出现。样式与同一网格里的其它瓦片完全一致。 ── */
+/* ── 今日统计瓦片：金券 / 经验 / 松果 / 便便 四项资源，加 11 项固定动作计数，
+   共 15 项始终展示（没有记录的显示 0）。样式与同一网格里的其它瓦片一致。 ── */
 const RANCH_TODAY_CURRENCIES = [
   { id: 1007, label: '金券', icon: 'i-carbon-ticket' },
   { id: 1008, label: '松果', icon: 'i-carbon-tree' },
   { id: 7002, label: '便便', icon: 'i-carbon-recycle' },
 ] as const
+// 今日统计固定展示这 11 项动作（连同 4 项资源共 15 项），顺序即下面的 TODAY_TILE_ORDER。
+// key 与 core/src/services/ranch/stats.ts 的 recordAction(action) 一一对应。
 const RANCH_TODAY_ACTIONS = [
-  { key: 'steal', label: '偷取' },
   { key: 'sell', label: '出售' },
-  { key: 'clean', label: '清理' },
+  { key: 'steal', label: '偷取' },
   { key: 'putMosquito', label: '蚊子' },
+  { key: 'feed', label: '喂养' },
+  { key: 'produce', label: '催产' },
+  { key: 'harvest', label: '收产物' },
+  { key: 'release', label: '出栏' },
+  { key: 'clean', label: '清理' },
+  { key: 'cleanFriend', label: '帮清理' },
+  { key: 'produceFriend', label: '帮催产' },
+  { key: 'claimTasks', label: '任务' },
 ] as const
 
 const currencyStatsMap = computed<Record<string, any>>(() => (state.value?.currencyStats || {}))
@@ -209,17 +217,6 @@ const fixedActionTiles = computed(() => RANCH_TODAY_ACTIONS.map(({ key, label })
   title: label,
 })))
 
-const otherActionTiles = computed(() => operationEntries.value
-  .filter(([key]) => !RANCH_TODAY_ACTIONS.some(item => item.key === key))
-  .map(([key, val]) => ({
-    key: `action-${key}`,
-    label: ranchActionLabels[key] || key,
-    image: '',
-    icon: ranchActionIcons[key] || 'i-carbon-chart-column',
-    value: String(val),
-    title: ranchActionLabels[key] || key,
-  })))
-
 const expTile = computed(() => ({
   key: 'today-exp',
   label: '经验',
@@ -230,12 +227,11 @@ const expTile = computed(() => ({
 }))
 
 /**
- * 今日统计瓦片的展示顺序：金券、经验、松果、便便、出售、偷取、蚊子、清理。
+ * 今日统计瓦片的展示顺序（用户指定）：
+ * 金券、经验、松果、便便、出售、偷取、蚊子、喂养、催产、收产物、出栏、清理、帮清理、帮催产、任务。
  *
- * 单独维护这张表而不是依赖上面的拼接顺序——RANCH_TODAY_CURRENCIES /
- * RANCH_TODAY_ACTIONS 是按业务语义分组写的，排版顺序会来回调整，
- * 两者耦合会导致「改一个顺序牵连另几处」。以后调位置只改这一行。
- * 表里没列到的动作（otherActionTiles）自动排在末尾，保持原有相对顺序。
+ * 单独维护这张表而不是依赖 RANCH_TODAY_CURRENCIES / RANCH_TODAY_ACTIONS 的拼接顺序，
+ * 这样以后调位置只改这一处。
  */
 const TODAY_TILE_ORDER = [
   'currency-1007',
@@ -245,11 +241,18 @@ const TODAY_TILE_ORDER = [
   'action-sell',
   'action-steal',
   'action-putMosquito',
+  'action-feed',
+  'action-produce',
+  'action-harvest',
+  'action-release',
   'action-clean',
+  'action-cleanFriend',
+  'action-produceFriend',
+  'action-claimTasks',
 ]
 
 const todayTiles = computed(() => {
-  const tiles = [expTile.value, ...todayCurrencyTiles.value, ...fixedActionTiles.value, ...otherActionTiles.value]
+  const tiles = [expTile.value, ...todayCurrencyTiles.value, ...fixedActionTiles.value]
   const rankOf = (key: string): number => {
     const index = TODAY_TILE_ORDER.indexOf(key)
     return index < 0 ? TODAY_TILE_ORDER.length : index

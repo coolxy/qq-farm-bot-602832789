@@ -554,9 +554,10 @@ function scanAgo() {
             type="button"
             class="catalog-buy"
             :disabled="busy || !canExchange || !canExchangeEntry(entry)"
+            :title="entry.exchangeable ? (canExchangeEntry(entry) ? '兑换' : '福气币不足') : '暂不可兑'"
             @click="openExchange(entry)"
           >
-            {{ canExchangeEntry(entry) ? '兑换' : (entry.exchangeable ? '福气币不足' : '暂不可兑') }}
+            兑换
           </button>
         </article>
       </div>
@@ -1246,6 +1247,8 @@ function scanAgo() {
 }
 
 .catalog-card {
+  display: flex;
+  flex-direction: column;
   padding: 10px 8px;
   border: 1px solid var(--ui-border, rgba(0, 0, 0, 0.08));
   border-radius: 12px;
@@ -1286,7 +1289,7 @@ function scanAgo() {
 }
 
 .catalog-price {
-  margin: 4px 0 0;
+  margin: 4px 0 6px;
   font-size: 12px;
   font-weight: 600;
   color: #d1542a;
@@ -1334,14 +1337,21 @@ function scanAgo() {
 }
 
 .catalog-buy {
-  margin-top: 6px;
+  /* 卡片用 flex column + margin-top:auto 把按钮顶到底部，同一行卡片等高时按钮对齐；
+     文案固定为「兑换」，禁用原因放 title，不再出现三种长短不一的标签。 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: auto;
   width: 100%;
+  min-height: 28px;
   padding: 5px 0;
   border: 1px solid #f0c98a;
   border-radius: 999px;
   background: #fff6e6;
   color: #a8661f;
   font-size: 12px;
+  white-space: nowrap;
   cursor: pointer;
 }
 

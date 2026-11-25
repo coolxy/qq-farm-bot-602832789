@@ -1,12 +1,20 @@
 {
   "major": 3,
   "minor": 39,
-  "patch": 15,
-  "build": 281,
-  "version": "3.39.15",
-  "updatedAt": "2026-11-25T22:55:18.596Z",
+  "patch": 16,
+  "build": 282,
+  "version": "3.39.16",
+  "updatedAt": "2026-11-25T23:09:11.448Z",
   "lastCommit": "—",
   "history": [
+    {
+      "version": "3.39.16",
+      "build": 282,
+      "date": "2026-11-26",
+      "summary": "牧场今日统计改为指定 15 项，兑换按钮统一，清理以薯换福面板说明",
+      "commit": "—",
+      "type": "patch"
+    },
     {
       "version": "3.39.15",
       "build": 281,

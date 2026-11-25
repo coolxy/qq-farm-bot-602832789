@@ -27,14 +27,9 @@ const enabled = computed(() => automation.value.automation.yishu_enabled !== fal
     class="min-w-0 border border-gray-100 rounded-lg p-4 space-y-3 dark:border-gray-700"
     aria-label="以薯换福活动自动化"
   >
-    <div class="space-y-1">
-      <h3 class="text-base text-gray-900 font-semibold dark:text-gray-100">
-        以薯换福
-      </h3>
-      <p class="text-sm text-gray-600 dark:text-gray-300">
-        领种子 / 分享 / 收提成都是「服务端说能做」才发一次写，卖薯先比价再卖。
-      </p>
-    </div>
+    <h3 class="text-base text-gray-900 font-semibold dark:text-gray-100">
+      以薯换福
+    </h3>
 
     <div class="automation-setting-item">
       <BaseSwitch v-model="automation.automation.yishu_enabled" label="启用以薯换福自动任务" />

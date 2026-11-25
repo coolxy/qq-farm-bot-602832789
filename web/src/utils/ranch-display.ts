@@ -22,7 +22,8 @@ export const ranchActionLabels: Record<string, string> = {
   stroke: '照料动物',
   release: '放生动物',
   putMosquito: '放蚊子',
-  cleanFriend: '帮好友清理',
+  cleanFriend: '帮清理',
+  produceFriend: '帮催产',
 }
 
 export const ranchActionIcons: Record<string, string> = {
@@ -49,6 +50,7 @@ export const ranchActionIcons: Record<string, string> = {
   release: 'i-carbon-arrow-right',
   putMosquito: 'i-carbon-pest',
   cleanFriend: 'i-carbon-user-multiple',
+  produceFriend: 'i-carbon-user-multiple',
 }
 
 /**
