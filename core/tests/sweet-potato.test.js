@@ -66,6 +66,8 @@ function buildDeps({
     // 分享回包可配置：默认「已分享、暴击没涨」，用来覆盖上报与确认两条分支。
     shareGrant = { item_id: 20307, count: 4 }, sharePrice = 10, shareBonusAfter = 0, shareClaimedAfter = true,
     shareReport = 'ok',
+    // 好友列表注入：默认同步返回，可传异步版本模拟生产环境的 getFriendsList()。
+    getFriendsOverride,
 }) {
     let groupReply = buildGroupReply(types, statePatch);
     const shopRemaining = shop.remaining ?? 50;
@@ -90,7 +92,7 @@ function buildDeps({
         getActivityCenterSnapshot: async () => ({}),
         getAutomation: () => ({ ...SWEET_POTATO_DEFAULTS }),
         getUserState: () => ({ gid: 10001 }),
-        getFriends: () => [{ gid: 10002, name: '好友A' }],
+        getFriends: getFriendsOverride || (() => [{ gid: 10002, name: '好友A' }]),
         getBagItems: reply => reply.item_bag?.items || [],
         getBag: async () => ({
             item_bag: {
@@ -815,6 +817,24 @@ test('sweet potato 比价: 3 分钟内复用结果，force 强制重扫', async 
     const forced = await service.scanShops({ limit: 5, force: '1' });
     assert.equal(forced.cached, false);
     assert.equal(countScan(), afterFirst * 2);
+});
+
+// 生产环境的 getFriendsList() 是 async（要打网关取好友）。friendsOf() 必须 await 它，
+// 否则遍历 Promise 会抛「list is not iterable」，让比价与出售整条链路不可用。
+// 这条测试用异步 getFriends 钉住 await，防止回退成同步调用。
+test('sweet potato 比价: 异步好友列表也能正常遍历（friendsOf 已 await）', async () => {
+    const types = await loadTypes();
+    const calls = [];
+    const asyncFriends = async () => [{ gid: 10002, name: '好友A' }];
+    const service = createSweetPotatoService(buildDeps({
+        types, calls, shop: { remaining: 50 }, getFriendsOverride: asyncFriends,
+    }));
+    const result = await service.scanShops({ limit: 5, force: '1' });
+    assert.equal(result.cached, false);
+    // 自家 + 一位异步好友，共 2 家铺子都被比到价。
+    assert.equal(result.scanned, 2);
+    assert.equal(result.shops.length, 2);
+    assert.equal(result.failed, 0);
 });
 
 test('sweet potato 刷新行情: cmd 92 查自己，回带剩余接收额度', async () => {

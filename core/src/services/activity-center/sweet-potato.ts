@@ -372,10 +372,15 @@ function createSweetPotatoService(deps: any) {
         return reply;
     }
 
-    function friendsOf(): any[] {
+    /**
+     * 好友列表。`getFriendsList` 是 async（要打网关取好友），必须 await；
+     * 之前把它当成同步函数直接 `for...of`，遍历 Promise 会抛「list is not iterable」，
+     * 让整个比价/出售链路在生产环境不可用（测试里注入的是同步 getFriends，所以没拦住）。
+     */
+    async function friendsOf(): Promise<any[]> {
         const list = (deps.getFriends
-            ? deps.getFriends()
-            : require('../friend').getFriendsList(false, 'normal', true)) || [];
+            ? await deps.getFriends()
+            : await require('../friend').getFriendsList(false, 'normal', true)) || [];
         const unique = new Map<string, any>();
         for (const friend of list) {
             const gid = String(friend?.gid || '');
@@ -524,7 +529,7 @@ function createSweetPotatoService(deps: any) {
         try {
             const data = await getGroup();
             if (!data.active) throw businessError('SWEET_POTATO_INACTIVE', '以薯换福活动未开放或已结束');
-            const list = friendsOf();
+            const list = await friendsOf();
             const page = list.slice(offset, offset + SHOP_PAGE_SIZE);
             const shops: any[] = [];
             for (const friend of page) {
@@ -578,7 +583,7 @@ function createSweetPotatoService(deps: any) {
             const self = selfGid();
             // 自家铺子先入列再截断：limit 很小时也要保证「卖自己」这条路还在。
             const targets: any[] = [{ gid: self, own: true, name: '自己的铺子', avatarUrl: '' }];
-            for (const friend of friendsOf()) {
+            for (const friend of await friendsOf()) {
                 if (targets.length >= limit) break;
                 const gid = String(friend.gid);
                 if (gid === self) continue;
@@ -914,7 +919,7 @@ function createSweetPotatoService(deps: any) {
         }
         let friend: any = null;
         if (owner !== self) {
-            friend = friendsOf().find(item => String(item.gid) === owner) || null;
+            friend = (await friendsOf()).find(item => String(item.gid) === owner) || null;
             if (!friend) throw businessError('SWEET_POTATO_NOT_FRIEND', '该铺主不在当前账号的好友列表中，请重新查询');
             if (!Number.isSafeInteger(input?.expectedPrice) || input.expectedPrice <= 0) {
                 throw businessError('INVALID_SWEET_POTATO_PRICE', '请先查询并确认好友收购价');

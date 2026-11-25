@@ -72,6 +72,15 @@ const ACTIVITY_ERROR_MESSAGES: Record<string, string> = {
 
 function activityErrorResponse(error: any): { code: string; message: string } {
     const rawMessage = String(error?.message || error || '活动操作失败');
+    // 临时诊断：把兜底分支的原始错误打到服务日志，避免「活动操作失败」吞掉真实原因。
+    if (!error?.code && !/\bcode=\d+\b/.test(rawMessage)) {
+        console.error('[activity-error-diag]', {
+            rawMessage,
+            name: error?.name,
+            code: error?.code,
+            stack: String(error?.stack || '').split('\n').slice(0, 6).join('\n'),
+        });
+    }
     const protocolCode = String(error?.code || rawMessage.match(/\bcode=(\d+)\b/)?.[1] || '');
     const friendlyMessage = ACTIVITY_ERROR_MESSAGES[protocolCode];
     if (friendlyMessage) return { code: protocolCode, message: friendlyMessage };

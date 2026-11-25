@@ -15,6 +15,7 @@
 
 | 版本 | 更新序号 | 日期 | 更新内容 | 提交 |
 | --- | --- | --- | --- | --- |
+| v3.39.3 | #270 | 2026-11-26 | 修复以薯换福 friendsOf 未 await 异步好友列表，比价扫描报 list is not iterable | `404efba7` |
 | v3.39.2 | #269 | 2026-11-26 | 修复以薯换福 selfGid 懒加载 require 路径错误导致行情刷新报 MODULE_NOT_FOUND | `682d6905` |
 | v3.39.1 | #268 | 2026-11-26 | 修复分享确认失败后冷却结束会重发 cmd 98 | `b75bb5e2` |
 | v3.39.0 | #267 | 2026-11-26 | 移植 li 版以薯换福运行时方案，同步协议与游戏客户端版本 | `b75bb5e2` |
@@ -257,6 +258,17 @@ flowchart TB
 ```
 
 ## 详细记录
+
+### 2026-11-26 · v3.39.3（#270） · 修复以薯换福 friendsOf 未 await 异步好友列表
+
+比价扫描 `GET /api/activity-center/sweet-potato/scan` 在生产环境一点就报「活动操作失败，请刷新页面后重试」，真实原因是 `TypeError: list is not iterable`。
+
+根因在 `friendsOf()`：它把 `getFriendsList()` 当成同步函数直接 `for...of` 遍历，但生产环境取好友是**异步**的——`require('../friend').getFriendsList()` 返回 `Promise`，遍历 Promise 必然抛 `list is not iterable`，让比价、出售、按好友铺子出售整条链路不可用。v3.39.0 移植时 `getFriends` 并未注入到 `createSweetPotatoService` 的 deps 里，所以生产环境总是走这条异步分支；而测试里注入的是**同步**的 `getFriends`，因此全绿却没拦住这个回归。
+
+- `friendsOf()` 改为 `async`，对 `deps.getFriends()` 与 `require('../friend').getFriendsList()` 两处都 `await`；三个调用点（`getSweetPotatoShops` 分页、`scanNow` 比价、`mutate` 按 owner 找好友）同步改为 `await friendsOf()`。`await` 同步值也安全，测试注入的同步 `getFriends` 不受影响。
+- `error-handler.ts` 增加兜底诊断：当错误既无 `code` 又不含 `code=数字` 时，把原始消息、`name`、堆栈打到服务日志，避免未知错误被笼统的「活动操作失败，请刷新页面后重试」吞掉。这次的 `list is not iterable` 就是靠这条诊断定位到的。
+- `core/tests/sweet-potato.test.js` 34 → 35 条：新增「异步好友列表也能正常遍历」，注入返回 Promise 的 `getFriends`，断言 `scanShops` 能扫到自家+好友。已验证移除 `await` 后该用例精确报 `list is not iterable`，能拦住回归。
+- 实测 `scan?limit=3&force=1` 返回 `scanned=3、failed=1、最高价 218、自家价 230`；二次扫描命中 3 分钟缓存（`cached=true`）；`/quote/refresh` 仍返回真实行情。core 1100 条、web 374 条全绿。
 
 ### 2026-11-26 · v3.39.2（#269） · 修复以薯换福 selfGid 懒加载 require 路径错误
 
