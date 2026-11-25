@@ -13,6 +13,7 @@ const directory = read('../src/views/activity-center/ActivityDirectoryPage.vue')
 const settings = read('../src/components/settings/AccountFeatureSettings.vue')
 const windows = read('../src/constants/activity-windows.ts')
 const tab = read('../src/components/activity/SweetPotatoTab.vue')
+const page = read('../src/views/activity-center/SweetPotatoActivityPage.vue')
 const coreConfig = read('../../core/src/config/sweet-potato.ts')
 
 test('活动目录能把 2026111708 解析成以薯换福玩法', () => {
@@ -149,4 +150,33 @@ test('活动说明是字符串数组时也要能显示，不能被归一化吞�
   assert.match(store, /function normalizeSweetPotatoRules\(value: unknown\): ActivityRulesDto \{/)
   assert.match(store, /if \(Array\.isArray\(value\)\) \{/)
   assert.match(store, /rules: normalizeSweetPotatoRules\(raw\.rules\)/)
+})
+
+test('活动页按 li 版结构自绘页头，不套本地活动外框', () => {
+  // 这一页在 li 版里是「直接铺在内容区」的特例（与牧歌初启、商城同一种结构）：
+  // 套 ActivityShell 会多出卡片边框和通用页头，就不是 li 版的样子了。
+  assert.doesNotMatch(page, /ActivityShell/)
+  assert.doesNotMatch(page, /ActivityHeader/)
+  assert.match(page, /<section class="yshf-view">/)
+  assert.match(page, /class="yshf-view__head"/)
+  // 页头图标与活动列表卡片共用同一张。
+  assert.match(page, /\/activity-assets\/yishuhuanfu\/icon\.png/)
+  // 福气币未知时显示 --，不能拿 0 冒充。
+  assert.match(page, /luckCoinBalanceKnown \? formatNumber\(sweetPotatoDetail\.luckCoinBalance \|\| '0'\) : '--'/)
+  // 进页面自动补额度走静默动作：不闪刷新按钮的 loading，也不覆盖当前提示。
+  assert.match(page, /activityStore\.loadSweetPotatoShop\(id\)/)
+})
+
+test('查额度不参与全局请求版本号竞争，否则会把兑换目录的回包判成过期', () => {
+  // 进页面时目录（cmd 97）和额度（cmd 92）是并发发的。两个都递增 requestVersion 的话，
+  // 后发的会让先回的那个 isCurrent() 失败，目录直接落不了地 —— 面板上「兑换商店」空着。
+  const start = store.indexOf('async function loadSweetPotatoShop')
+  const end = store.indexOf('async function runSweetPotatoAction')
+  assert.ok(start > 0 && end > start, '找不到 loadSweetPotatoShop 实现')
+  const fn = store.slice(start, end)
+  assert.doesNotMatch(fn, /requestVersion\.value/, '查额度不能碰 requestVersion')
+  assert.match(fn, /isCurrentAccount\(requestedAccountId\)/, '换账号后要丢掉旧回包')
+  // 落盘规则只有一份：行情刷新与静默查额度共用 applyShopQuote。
+  assert.match(store, /function applyShopQuote\(result: ActivityRecord, current: SweetPotatoActivityDto\)/)
+  assert.match(store, /applyShopQuote\(record\(responsePayload\(response\.data\)\), current\)/)
 })

@@ -1777,8 +1777,9 @@ export function normalizeSweetPotatoActivity(value: unknown, icons: { seed?: str
     active: bool(raw.active),
     serverTime: text(raw.serverTime, raw.server_time),
     shop: {
-      // 后端快照不带铺主 GID，用活动 ID 兜底：这个字段只用于「换号 / 换活动时重置出售目标」的 watch。
-      gid: text(raw.shopGid, raw.shop_gid, activityId),
+      // 铺主 GID：后端下发真实 GID，换账号时它会变，Tab 靠这个清掉上一个账号的出售目标。
+      // 早先没有这个字段、拿 activityId 兜底，而 activityId 各账号都一样，切号后不会重置。
+      gid: text(raw.shopGid, raw.shop_gid),
       price: basePrice,
       priceKnown: raw.priceKnown === undefined ? Number(basePrice) > 0 : bool(raw.priceKnown, raw.price_known),
       quoteTime: text(raw.quoteTime, raw.quote_time),
@@ -2058,9 +2059,15 @@ export const useActivityCenterStore = defineStore('activity-center', () => {
     notice.value = ''
   }
 
+  /** 只校验「当前账号还是不是这一个」，不看请求版本号。 */
+  function isCurrentAccount(accountId: string) {
+    if (typeof localStorage === 'undefined')
+      return true
+    return String(localStorage.getItem('current_account_id') || '') === accountId
+  }
+
   function isCurrent(version: number, accountId: string) {
-    const storedAccountId = typeof localStorage === 'undefined' ? accountId : String(localStorage.getItem('current_account_id') || '')
-    return requestVersion.value === version && storedAccountId === accountId
+    return requestVersion.value === version && isCurrentAccount(accountId)
   }
 
   function applySnapshot(value: unknown, clientStartedAt = Date.now()) {
@@ -2566,6 +2573,54 @@ export const useActivityCenterStore = defineStore('activity-center', () => {
    * 详情快照只有基础价与暴击，剩余接收额度必须现查；这个入口同时承担
    * 「进页面补额度」与「手动刷新行情」两个用途。
    */
+  /**
+   * 把 cmd 92 的回包写进详情与比价表：行情、暴击加成、剩余接收额度一起更新。
+   *
+   * 抽出来是为了让「刷新行情」和「静默查额度」共用同一套落盘规则，
+   * 否则两处各写一遍迟早写出不一致（尤其是额度与已用的换算）。
+   */
+  function applyShopQuote(result: ActivityRecord, current: SweetPotatoActivityDto) {
+    const shop = record(result.shop)
+    const quota = result.quota === null || result.quota === undefined ? null : text(result.quota)
+    const quotaCap = text(shop.dailyQuota, current.shop.quotaCap)
+    sweetPotatoDetail.value = {
+      ...current,
+      shop: {
+        ...current.shop,
+        price: text(shop.basePrice, current.shop.price),
+        bonus: text(shop.bonusPrice, current.shop.bonus),
+        estimatedPrice: result.price === undefined ? current.shop.estimatedPrice : text(result.price),
+        priceKnown: result.priceKnown === undefined ? current.shop.priceKnown : bool(result.priceKnown),
+        quota,
+        quotaCap,
+        quotaUsed: quota === null
+          ? null
+          : String(Math.max(0, Number(quotaCap || 0) - Number(quota || 0))),
+      },
+    }
+    // 比价表里自己那一行同步更新，免得两个地方显示的价格对不上。
+    const ownIndex = sweetPotatoFriendShops.value.findIndex(entry => entry.own)
+    if (ownIndex >= 0) {
+      const next = [...sweetPotatoFriendShops.value]
+      const own = next[ownIndex]
+      next[ownIndex] = {
+        ...own,
+        price: text(shop.basePrice, own.price),
+        bonus: text(shop.bonusPrice, own.bonus),
+        totalPrice: result.price === undefined ? own.totalPrice : text(result.price),
+        quota: text(result.quota, own.quota),
+        quotaCap,
+      }
+      sweetPotatoFriendShops.value = next
+    }
+  }
+
+  /**
+   * 刷新本人行情（cmd 92 只读），顺带拿到剩余接收额度。
+   *
+   * 页面上的「刷新行情」按钮走这里：打 pending 标记并给出提示。
+   * 只想静默补额度（进页面自动补齐）用 `loadSweetPotatoShop`。
+   */
   async function refreshSweetPotatoQuote(accountId: string) {
     const requestedAccountId = String(accountId || '').trim()
     if (!requestedAccountId || pendingActions.value.refreshSweetPotatoQuote)
@@ -2582,42 +2637,9 @@ export const useActivityCenterStore = defineStore('activity-center', () => {
       if (!isCurrent(version, requestedAccountId))
         return false
       const result = record(responsePayload(response.data))
-      const shop = record(result.shop)
       const current = sweetPotatoDetail.value
-      if (current) {
-        const quota = result.quota === null || result.quota === undefined ? null : text(result.quota)
-        const quotaCap = text(shop.dailyQuota, current.shop.quotaCap)
-        sweetPotatoDetail.value = {
-          ...current,
-          shop: {
-            ...current.shop,
-            price: text(shop.basePrice, current.shop.price),
-            bonus: text(shop.bonusPrice, current.shop.bonus),
-            estimatedPrice: result.price === undefined ? current.shop.estimatedPrice : text(result.price),
-            priceKnown: result.priceKnown === undefined ? current.shop.priceKnown : bool(result.priceKnown),
-            quota,
-            quotaCap,
-            quotaUsed: quota === null
-              ? null
-              : String(Math.max(0, Number(quotaCap || 0) - Number(quota || 0))),
-          },
-        }
-        // 比价表里自己那一行同步更新，免得两个地方显示的价格对不上。
-        const ownIndex = sweetPotatoFriendShops.value.findIndex(entry => entry.own)
-        if (ownIndex >= 0) {
-          const next = [...sweetPotatoFriendShops.value]
-          const own = next[ownIndex]
-          next[ownIndex] = {
-            ...own,
-            price: text(shop.basePrice, own.price),
-            bonus: text(shop.bonusPrice, own.bonus),
-            totalPrice: result.price === undefined ? own.totalPrice : text(result.price),
-            quota: text(result.quota, own.quota),
-            quotaCap,
-          }
-          sweetPotatoFriendShops.value = next
-        }
-      }
+      if (current)
+        applyShopQuote(result, current)
       notice.value = text(result.message) || '行情已刷新'
       return true
     }
@@ -2628,6 +2650,36 @@ export const useActivityCenterStore = defineStore('activity-center', () => {
     }
     finally {
       pendingActions.value.refreshSweetPotatoQuote = false
+    }
+  }
+
+  /**
+   * 查本人铺子剩余接收额度（cmd 92），只回填额度与行情。
+   *
+   * 与 li 版的 `loadYishuHuanfuShop` 同语义：不参与 requestVersion 竞争、不设 pending、
+   * 不动提示文案。所以它可以和兑换目录并行发——两边都递增全局版本号的话，
+   * 先回的那个会被判成过期，目录就落不了地（面板上「兑换商店」会一直空着）。
+   */
+  async function loadSweetPotatoShop(accountId: string) {
+    const requestedAccountId = String(accountId || '').trim()
+    if (!requestedAccountId)
+      return false
+    try {
+      const response = await api.post('/api/activity-center/sweet-potato/quote/refresh', {}, {
+        headers: { 'x-account-id': requestedAccountId },
+        skipErrorToast: true,
+      } as any)
+      // 只比账号：换了账号就丢掉这份回包，但不影响任何进行中的请求。
+      if (!isCurrentAccount(requestedAccountId))
+        return false
+      const current = sweetPotatoDetail.value
+      if (!current)
+        return false
+      applyShopQuote(record(responsePayload(response.data)), current)
+      return true
+    }
+    catch {
+      return false
     }
   }
 
@@ -2914,6 +2966,7 @@ export const useActivityCenterStore = defineStore('activity-center', () => {
     sweetPotatoRecordsNote,
     loadSweetPotatoDetail,
     loadSweetPotatoCatalog,
+    loadSweetPotatoShop,
     refreshSweetPotatoQuote,
     claimSweetPotatoSeeds,
     sellSweetPotato,

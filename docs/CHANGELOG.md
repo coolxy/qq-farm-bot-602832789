@@ -15,6 +15,7 @@
 
 | 版本 | 更新序号 | 日期 | 更新内容 | 提交 |
 | --- | --- | --- | --- | --- |
+| v3.39.6 | #272 | 2026-11-26 | 以薯换福页面完全按 li 版重做 | — |
 | v3.39.5 | #271 | 2026-11-26 | 按 li 版设计稿重构以薯换福活动页，修复补种模块路径与面板版本号不同步 | — |
 | v3.39.3 | #270 | 2026-11-26 | 常规更新 | — |
 | v3.39.2 | #269 | 2026-11-26 | 常规更新 | — |
@@ -259,6 +260,40 @@ flowchart TB
 ```
 
 ## 详细记录
+
+### 2026-11-26 · v3.39.6（#272） · 以薯换福页面完全按 li 版重做
+
+用户看过上一版后反馈「还是和 li 版不一样」，明确要求完整移植 li 版方案、放弃本地那一版。
+
+**一、页面层逐字照搬 li 版（核心）**
+
+上一版保留着本地 `ActivityShell` + `ActivityHeader` 外壳和 `main.activity-content` 卡片容器，看起来仍是「带边框圆角的卡片 + 本地统一页头」。li 版这一页是特例：自绘页头（返回 / 图标 / 标题 / 剩余时间 / 福气币胶囊 / 刷新），内容直接铺开，不套任何外框。
+
+- `SweetPotatoActivityPage.vue` 按 li 版 `YishuHuanfuActivityPage.vue` 重写：模板、类名（`yshf-view*`）、样式、`headMeta` 时间格式化、目录与额度自动补齐、记录按账号重拉，逐段对齐。
+- 唯一适配：本地活动详情态由父级 `overflow: hidden` 把滚动交给页面自管（`.farm-page-content.is-activity-detail`），而 li 版页面挂在可滚动区里。给 `.yshf-view` 加 `overflow-y: auto; min-height: 0`，视觉不变。
+- 图标改回 li 版路径 `activity-assets/yishuhuanfu/icon.png`，目录页映射同步；删除本地 `activity-assets/sweet-potato/`。
+
+**二、补 `shopGid`：让「换账号重置出售目标」真正生效**
+
+Tab 里有 `watch(() => [activityId, shop.gid], ...)` 清空出售目标。但后端快照从没下发过 `shopGid`，前端归一化只能拿 `activityId` 兜底 —— 而 `activityId` 对所有账号都是 `2026111708`，换账号不会变，出售目标会残留上一个账号的好友 GID，可能把蜜薯卖进别人的铺子。
+
+- 后端 `toDto()` 增加 `shopGid: selfGid()`。
+- 前端归一化去掉 `activityId` 兜底。
+- 上一版用 `:key` 按账号重建 Tab 绕过，本版撤掉，改回 li 版机制。
+
+**三、修目录与额度并发互踢**
+
+进页面时兑换目录（cmd 97）和铺子额度（cmd 92）是并发发的，两者都递增 store 的全局 `requestVersion`，后发的会让先回的那个 `isCurrent()` 失败 —— 目录落不了地，「兑换商店」空着（要靠额度回包触发 watch 再重试一次才自愈，白打一轮请求）。
+
+- 新增 `loadSweetPotatoShop()`，与 li 版 `loadYishuHuanfuShop` 同语义：不碰 `requestVersion`、不设 pending、不动提示，只校验账号后回填额度。
+- 抽出 `applyShopQuote()` 统一落盘，行情刷新与静默查额度共用一份。
+- 页面层回到 li 版的并发写法。
+
+**四、验证**
+
+- web 380 条、core 1107 条全绿（新增 2 条：页面层不套外框、查额度不碰 `requestVersion`）。
+- 实机：`shopGid=1011388647`、164+66=230、福气币 158700、种子 16、蜜薯 0。
+- 新踩的坑：本次重启时前端正在重建（`web/dist` 正处于被移走的窗口），`fs.existsSync(webDist)` 判定失败 → `express.static` 根本没挂载，整站静态资源全被 SPA 兜底成 `index.html`（页面会白屏）。**重启服务必须等前端构建完成。**
 
 ### 2026-11-26 · v3.39.5（#271） · 按 li 版设计稿重构以薯换福活动页，修复补种模块路径与面板版本号不同步
 

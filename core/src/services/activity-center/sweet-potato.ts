@@ -305,6 +305,9 @@ function createSweetPotatoService(deps: any) {
             activityId: SWEET_POTATO.activityId,
             groupId: SWEET_POTATO.groupId,
             shopActivityId: SWEET_POTATO.shopActivityId,
+            // 铺主 GID：面板靠它判断「换账号了要清掉出售目标」。以前没下发，前端只能拿
+            // activityId 兜底，而 activityId 所有账号都一样，切号后会把蜜薯卖给上一个号的好友。
+            shopGid: selfGid(),
             title: '以薯换福',
             active: !!data.active,
             startTime: data.start * 1000,
