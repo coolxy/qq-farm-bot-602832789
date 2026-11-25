@@ -844,8 +844,8 @@ async function handleResetSystemConfig() {
             :aria-pressed="activeTab === tab.key"
             @click="activeTab = tab.key"
           >
-            <div :class="tab.icon" />
-            {{ tab.label }}
+            <div class="settings-category-icon" :class="tab.icon" />
+            <span class="settings-category-label">{{ tab.label }}</span>
           </button>
         </nav>
       </aside>
@@ -1367,9 +1367,21 @@ async function handleResetSystemConfig() {
     color 150ms,
     border-color 150ms;
 }
-.settings-category > div {
-  flex-shrink: 0;
+/* 图标盒定宽：paw 这类实心图标本来就比线性图标胖，不定宽会让每格文字起点错开。 */
+.settings-category-icon {
+  display: flex;
+  /* 用 flex-basis 定宽：uno 的 .i-carbon-* 自带 width:1em，会盖掉同特异性里的 width。 */
+  flex: 0 0 18px;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
   font-size: 18px;
+}
+.settings-category-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .settings-category:hover {
   background: var(--surface-2);
@@ -1409,20 +1421,40 @@ async function handleResetSystemConfig() {
   .settings-navigation-label {
     display: none;
   }
+  /*
+   * 手机端：固定三列网格，列宽一律均分。
+   * 之前是 flex-wrap + flex:1 0 auto，每格宽度由自身标签字数决定，
+   * 「版本与更新」比「好友申请」宽，换行后三列就对不上，图标也跟着漂。
+   * 交给 grid 之后单元格只跟列宽走，9 个入口正好三行三列。
+   */
   .settings-categories {
-    flex-direction: row;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 4px;
-    overflow-x: auto;
   }
   .settings-category {
-    flex: 1 0 auto;
-    flex-shrink: 0;
-    justify-content: center;
+    flex: none;
+    justify-content: flex-start;
     gap: 6px;
+    min-width: 0;
     min-height: 40px;
-    padding: 8px 10px;
+    padding: 8px;
     white-space: nowrap;
+  }
+}
+
+/* 320px 窄屏：列宽只剩 92px，缩字号 + 收内边距 + 缩图标，把「连接与设备」留在单行。 */
+@media (max-width: 359px) {
+  .settings-category {
+    gap: 4px;
+    padding: 8px 4px;
+    font-size: 12px;
+  }
+  .settings-category-icon {
+    flex-basis: 16px;
+    width: 16px;
+    height: 16px;
+    font-size: 16px;
   }
 }
 </style>

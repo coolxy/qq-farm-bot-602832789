@@ -1042,3 +1042,65 @@ test('Docker 部署：作业挂在 running 但助手心跳没了，判定为中�
         cleanup(root);
     }
 });
+
+test('Docker 部署：助手写秒级心跳也要判成在线，不能算成几十年没心跳', async () => {
+    const { service, root } = makeDockerService();
+    try {
+        const runtimeDir = path.join(root, 'runtime');
+        fs.mkdirSync(runtimeDir, { recursive: true });
+        // 宿主机脚本是 sh + BusyBox date，只能拿到 `date +%s` 的秒；后端按毫秒比。
+        // 不做归一化的话 age 会等于「当前毫秒时间戳」本身，面板打出「已经 29896434 分钟没有心跳」。
+        const seconds = Math.floor(Date.now() / 1000);
+        fs.writeFileSync(path.join(runtimeDir, 'update-agent.json'), JSON.stringify({
+            protocol: 1,
+            pid: 1,
+            startedAt: seconds - 60,
+            heartbeatAt: seconds,
+            projectDir: '/project',
+        }), 'utf8');
+
+        const status = await service.getStatus();
+        assert.equal(status.dockerAgent.available, true, status.dockerAgent.reason);
+        assert.equal(status.dockerAgent.reason, '');
+        assert.equal(status.applySupported, true);
+        // 折算成毫秒，面板 formatTime 才不会把心跳显示成 1970 年
+        assert.ok(status.dockerAgent.heartbeatAt > 1e12, `heartbeatAt 应为毫秒：${status.dockerAgent.heartbeatAt}`);
+        assert.ok(Date.now() - status.dockerAgent.heartbeatAt < 5000, '心跳经过折算后应贴近当前时间');
+    }
+    finally {
+        cleanup(root);
+    }
+});
+
+test('Docker 部署：作业时间戳是秒时不会被误判成「任务已中断」', async () => {
+    const { service, root } = makeDockerService();
+    try {
+        const runtimeDir = path.join(root, 'runtime');
+        fs.mkdirSync(runtimeDir, { recursive: true });
+        const seconds = Math.floor(Date.now() / 1000);
+        fs.writeFileSync(path.join(runtimeDir, 'update-agent.json'), JSON.stringify({
+            protocol: 1,
+            pid: 1,
+            startedAt: seconds - 120,
+            heartbeatAt: seconds,
+            projectDir: '/project',
+        }), 'utf8');
+        fs.writeFileSync(path.join(runtimeDir, 'update-job.json'), JSON.stringify({
+            id: 'docker_abc12345',
+            action: 'update',
+            status: 'running',
+            phase: '拉取代码',
+            startedAt: seconds - 5,
+            updatedAt: seconds,
+            recentLines: [],
+        }), 'utf8');
+
+        const status = await service.getStatus();
+        assert.equal(status.job?.status, 'running', '心跳新鲜时不该把运行中的作业尸检掉');
+        assert.ok(status.job.startedAt > 1e12, '作业时间同样要折算成毫秒');
+        assert.ok(status.job.updatedAt > 1e12);
+    }
+    finally {
+        cleanup(root);
+    }
+});

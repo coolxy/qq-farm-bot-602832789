@@ -114,6 +114,33 @@ test('日志行窄屏折成两列，正文整行铺满', () => {
   assert.match(phone, /\.log-row__body[\s\S]*?grid-column:\s*1 \/ -1/)
 })
 
+// 手机端两个首页的日志区必须定高内滚：父级高度全是内容驱动，
+// 只给 max-height 的话 overflow:visible 的内容会一路外溢（实测 300 条日志把页面撑到 12000px+），
+// 而父级高度是被 max-height 夹出来的、不是 definite，子元素的 height:100% 会退化成 auto。
+test('手机端日志区定高内滚，不随日志条数把页面撑高', () => {
+  const phone = atRule(panel, '@media (max-width: 767px)')
+  // 确定高度必须落在滚动本体上（它没有别的工具类抢高度）
+  assert.match(phone, /\.run-log-scroll\s*\{\s*height:\s*var\(--run-log-mobile-height/, '确定高度要写在滚动本体上')
+  assert.ok(
+    !/\.run-log-list\s*\{[^}]*[{};]\s*height:\s*var\(--run-log-mobile-height/.test(phone),
+    '父级高度不是 definite，写在 .run-log-list 上会让子元素的 100% 退化成 auto',
+  )
+  assert.match(phone, /\.run-log-list\s*\{[\s\S]*?flex:\s*0 0 auto/, '移动端不再让日志区参与 flex 分配')
+  assert.match(phone, /\.run-log-list\s*\{[\s\S]*?max-height:\s*var\(--run-log-mobile-height/, '外层再兜一层上限')
+  assert.match(phone, /\.run-log-list\s*\{[\s\S]*?overflow:\s*hidden/, '溢出一律裁掉，不许外溢')
+
+  // 滚动容器仍然是内部的列表本体
+  const scroll = rule(panel, '.run-log-scroll')
+  assert.match(scroll, /height:\s*100%/)
+  assert.match(scroll, /overflow-y:\s*auto/)
+  assert.match(scroll, /overscroll-behavior:\s*contain/, '滚到底不把滚动链传给页面')
+
+  // 外壳与页面都不该再靠 max-h 兜高度
+  assert.ok(!card.includes('max-h-['), 'RunLogCard 不应再用 max-h 声明日志高度')
+  assert.ok(!/list-class="[^"]*max-h-\[/.test(dashboard), 'Dashboard 不应再给日志区传 max-h')
+  assert.ok(!/list-class="[^"]*max-h-\[/.test(overview), '牧场概览不应再给日志区传 max-h')
+})
+
 test('模块常量：好友/仓库降为农场子模块，一级模块不再单列', () => {
   assert.match(constants, /export const LOG_MODULES/)
   assert.ok(!/label: '好友'/.test(constants.slice(constants.indexOf('LOG_MODULES'), constants.indexOf('SUBMODULES_BY_PARENT'))), '好友应作为子模块')

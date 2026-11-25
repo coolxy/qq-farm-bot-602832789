@@ -653,12 +653,11 @@ useIntervalFn(updateCountdowns, 1000)
 
     <!-- Main Content Flex -->
     <div class="flex flex-1 flex-col items-stretch gap-6 md:flex-row">
-      <!-- 运行日志：与牧场首页共用同一外壳，桌面端定高铺满、不留白 -->
+      <!-- 运行日志：与牧场首页共用同一外壳，桌面端定高铺满、不留白；手机端高度由面板媒体查询定死 -->
       <RunLogCard
         default-module="farm"
         :max-logs="200"
         :level-in-signature="false"
-        list-class="max-h-[50vh] min-h-0 flex-1 md:max-h-none"
       />
 
       <!-- Right Column Stack -->

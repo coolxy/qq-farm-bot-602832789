@@ -301,7 +301,7 @@ export function readCommitSubject(file) {
     }
 }
 
-/** 收集本次更新摘要：显式 message > 最新提交 > CHANGELOG 最新未标记标题。 */
+/** 收集本次更新摘要：显式 message > 最新提交 > CHANGELOG 最新记录标题。 */
 export function collectSummary(root, opts = {}) {
     if (opts.message) return String(opts.message).trim();
     const changelogPath = join(root, 'docs/CHANGELOG.md');
@@ -310,13 +310,21 @@ export function collectSummary(root, opts = {}) {
         const subject = git(root, ['log', '-1', '--pretty=%s']);
         if (subject) return subject;
     }
+    // 已发布到 version.json 的那个版本号。详细记录的标题若正好是它，
+    // 说明这次提交没有新写记录，不能把上一次的摘要重复顶上。
+    const released = String((readJson(join(root, 'version.json'), {}) || {}).version || '').trim();
     const lines = changelog.split('\n');
     const recordIdx = lines.findIndex(line => /^##\s+详细记录/.test(line));
     const start = recordIdx >= 0 ? recordIdx + 1 : 0;
     for (let i = start; i < lines.length; i++) {
         if (!/^###\s/.test(lines[i])) continue;
-        if (/v\d+\.\d+\.\d+/.test(lines[i])) break;
-        return summarizeTitle(lines[i]);
+        // 标题可能已经预先写成「2026-11-25 · v3.36.8（#260） · 摘要」：
+        // 工作流上通常是先写记录再提交，标题里的版本号是**即将发布**的那个，
+        // 与 version.json 当前的版本不同。带版本号本身不代表旧记录。
+        const tagged = /v(\d+\.\d+\.\d+)（#\d+）/.exec(lines[i]);
+        if (tagged && tagged[1] === released) break;
+        const summary = summarizeTitle(lines[i]);
+        if (summary) return summary;
     }
     return '常规更新';
 }

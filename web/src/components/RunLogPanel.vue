@@ -584,6 +584,8 @@ function formatLogTime(timeStr: string) {
   min-height: 0;
   height: 100%;
   overflow-y: auto;
+  /* 日志滚到底部后不再把滚动链传给页面（手机端从日志区滑出去容易误滑整页） */
+  overscroll-behavior: contain;
   padding: 6px;
   border-radius: var(--ui-radius-control);
   background: var(--ui-surface-soft);
@@ -593,6 +595,28 @@ function formatLogTime(timeStr: string) {
 .run-log-list {
   position: relative;
   min-height: 0;
+}
+/*
+ * 手机端必须给日志区一个「确定高度」：
+ * 这里往上（run-log-panel / dash-logs__card / page-stack）一路都是内容驱动的高度，
+ * 日志再多也不会有人裁剪它 —— 实测 300 条日志能把页面撑到 12000px 以上，把下面的卡片顶没。
+ *
+ * 两个坑：
+ *   1. 只写 max-height 不管用：overflow:visible 的内容照样外溢，继续撑高页面；
+ *   2. 高度必须写在 .run-log-scroll 上。父级 .run-log-list 的高度是被 max-height 夹出来的，
+ *      那不是 definite 高度，子元素的 height:100% 会退化成 auto，日志多长它就有多长。
+ * 所以：滚动本体直接拿确定高度自己滚，外层再用 max-height + hidden 兜一层，
+ * 这样也不依赖 flex 工具类的胜负。要微调在调用方覆盖 --run-log-mobile-height 即可。
+ */
+@media (max-width: 767px) {
+  .run-log-scroll {
+    height: var(--run-log-mobile-height, min(60vh, 26rem));
+  }
+  .run-log-list {
+    flex: 0 0 auto;
+    max-height: var(--run-log-mobile-height, min(60vh, 26rem));
+    overflow: hidden;
+  }
 }
 .run-log-date {
   padding: 6px 10px 4px;

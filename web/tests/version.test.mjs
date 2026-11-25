@@ -13,6 +13,7 @@ import {
   bumpVersion,
   changelogTag,
   classifyUpdate,
+  collectSummary,
   containsSkippedDigit,
   DEFAULT_ROOT,
   hasVersionPrefixLine,
@@ -504,4 +505,30 @@ test('快成熟判定默认值恢复为 300 秒', () => {
 test('DEFAULT_ROOT 指向仓库根且版本脚本存在', () => {
   assert.equal(DEFAULT_ROOT, ROOT)
   assert.ok(existsSync(join(ROOT, 'scripts/version.mjs')))
+})
+
+test('预先写好带版本号的详细记录标题，摘要仍能取到', (t) => {
+  const tmp = mkdtempSync(join(tmpdir(), 'farm-summary-'))
+  t.after(() => rmSync(tmp, { recursive: true, force: true }))
+  mkdirSync(join(tmp, 'docs'), { recursive: true })
+  writeFileSync(join(tmp, 'version.json'), JSON.stringify({ version: '3.36.7', history: [] }, null, 2))
+  writeFileSync(
+    join(tmp, 'docs/CHANGELOG.md'),
+    '# 更新日志\n\n## 详细记录\n\n### 2026-11-25 · v3.36.8（#260） · 补齐上游容器更新能力对照\n',
+  )
+  // 标题里的版本是「即将发布」的那个，与 version.json 当前版本不同 → 应当取到。
+  assert.equal(collectSummary(tmp), '补齐上游容器更新能力对照')
+})
+
+test('最新详细记录就是已发布版本时，不重复上次的摘要', (t) => {
+  const tmp = mkdtempSync(join(tmpdir(), 'farm-summary-'))
+  t.after(() => rmSync(tmp, { recursive: true, force: true }))
+  mkdirSync(join(tmp, 'docs'), { recursive: true })
+  writeFileSync(join(tmp, 'version.json'), JSON.stringify({ version: '3.36.8', history: [] }, null, 2))
+  writeFileSync(
+    join(tmp, 'docs/CHANGELOG.md'),
+    '# 更新日志\n\n## 详细记录\n\n### 2026-11-25 · v3.36.8（#260） · 补齐上游容器更新能力对照\n',
+  )
+  // 本次还没写新记录：标题就是已经发布的那条，退回占位摘要而不是复读。
+  assert.equal(collectSummary(tmp), '常规更新')
 })

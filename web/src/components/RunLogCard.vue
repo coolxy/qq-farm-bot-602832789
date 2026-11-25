@@ -3,7 +3,8 @@ import RunLogPanel from '@/components/RunLogPanel.vue'
 
 // 农场 / 牧场首页共用的日志卡片外壳：
 // 桌面端由父行高撑开（min-height 兜底），卡片绝对定位铺满，避免下半部分留白；
-// 移动端退回普通文档流，列表按自身 max-height 滚动。
+// 移动端退回普通文档流，列表高度由 RunLogPanel 内的媒体查询定死并自己滚动
+// （这里不要再传 max-h-*，max-height 裁不住 overflow:visible 的内容，日志会外溢撑高页面）。
 const props = withDefaults(defineProps<{
   defaultModule?: string
   maxLogs?: number
@@ -14,7 +15,7 @@ const props = withDefaults(defineProps<{
   defaultModule: 'ranch',
   maxLogs: 300,
   levelInSignature: true,
-  listClass: 'max-h-[60vh] min-h-0 flex-1 md:max-h-none',
+  listClass: 'min-h-0 flex-1',
   minHeight: 480,
 })
 </script>

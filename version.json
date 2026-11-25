@@ -1,12 +1,44 @@
 {
   "major": 3,
   "minor": 36,
-  "patch": 6,
-  "build": 258,
-  "version": "3.36.6",
-  "updatedAt": "2026-11-24T16:05:16.790Z",
+  "patch": 10,
+  "build": 262,
+  "version": "3.36.10",
+  "updatedAt": "2026-11-25T05:22:56.342Z",
   "lastCommit": "—",
   "history": [
+    {
+      "version": "3.36.10",
+      "build": 262,
+      "date": "2026-11-25",
+      "summary": "手机端设置页入口改成等宽三列网格",
+      "commit": "—",
+      "type": "patch"
+    },
+    {
+      "version": "3.36.9",
+      "build": 261,
+      "date": "2026-11-25",
+      "summary": "修掉更新助手心跳的时间单位错位",
+      "commit": "—",
+      "type": "patch"
+    },
+    {
+      "version": "3.36.8",
+      "build": 260,
+      "date": "2026-11-25",
+      "summary": "补齐上游容器更新能力对照，修正摘要提取",
+      "commit": "—",
+      "type": "patch"
+    },
+    {
+      "version": "3.36.7",
+      "build": 259,
+      "date": "2026-11-25",
+      "summary": "手机端日志区定高内滚，不再把首页撑成一条长条",
+      "commit": "—",
+      "type": "patch"
+    },
     {
       "version": "3.36.6",
       "build": 258,

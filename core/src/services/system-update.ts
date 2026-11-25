@@ -190,6 +190,21 @@ function isProcessAlive(pid: number): boolean {
     }
 }
 
+/**
+ * 把外部写入的时间戳归一化成毫秒。
+ *
+ * 宿主机更新助手是 sh 脚本：BusyBox 的 `date` 没有 `%N`，只能拿到 `date +%s`
+ * 的秒级时间戳，而后端一律用 `Date.now()` 的毫秒。差 1000 倍会让「每几秒刷一次」
+ * 的心跳被算成几十年没心跳（实测面板打出「已经 29896434 分钟没有心跳」），
+ * 一键更新整条链路当场判死，还会把正在跑的作业误标成「任务已中断」。
+ * 按量级判：小于 1e12 的一律当秒（毫秒时间戳 2001 年后就超过这个数）。
+ */
+function toEpochMs(value: unknown): number {
+    const raw = Number(value);
+    if (!Number.isFinite(raw) || raw <= 0) return 0;
+    return raw < 1e12 ? Math.round(raw * 1000) : Math.round(raw);
+}
+
 function readJobState(runtimeDir: string): PanelUpdateJobState | null {
     const raw = layout.readJsonSafe(path.join(runtimeDir, JOB_FILENAME), null);
     if (!raw || typeof raw !== 'object') return null;
@@ -201,9 +216,9 @@ function readJobState(runtimeDir: string): PanelUpdateJobState | null {
         status,
         phase: String(raw.phase || ''),
         detail: typeof raw.detail === 'string' ? raw.detail : '',
-        startedAt: Number(raw.startedAt) || 0,
-        updatedAt: Number(raw.updatedAt) || 0,
-        finishedAt: Number(raw.finishedAt) || undefined,
+        startedAt: toEpochMs(raw.startedAt),
+        updatedAt: toEpochMs(raw.updatedAt),
+        finishedAt: toEpochMs(raw.finishedAt) || undefined,
         exitCode: raw.exitCode === undefined ? undefined : raw.exitCode,
         error: typeof raw.error === 'string' ? raw.error : undefined,
         fromCommit: typeof raw.fromCommit === 'string' ? raw.fromCommit : undefined,
@@ -464,8 +479,9 @@ function createSystemUpdateService(options: SystemUpdateServiceOptions = {}) {
                     + '之后这一页就能一键更新；不启用也可以按下面的命令手动重建。',
             };
         }
-        const heartbeatAt = Number(raw.heartbeatAt) || Number(raw.startedAt) || 0;
-        const startedAt = Number(raw.startedAt) || heartbeatAt || null;
+        // 助手脚本写的是秒（BusyBox date 没有 %N），这里统一折算成毫秒再比。
+        const heartbeatAt = toEpochMs(raw.heartbeatAt) || toEpochMs(raw.startedAt) || 0;
+        const startedAt = toEpochMs(raw.startedAt) || heartbeatAt || null;
         const base: DockerUpdateAgentStatus = {
             ...empty,
             startedAt,

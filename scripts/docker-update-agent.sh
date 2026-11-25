@@ -40,7 +40,15 @@ REQUEST_FILE="$RUNTIME_DIR/update-request.json"
 JOB_FILE="$RUNTIME_DIR/update-job.json"
 LOG_FILE="$RUNTIME_DIR/update-job.log"
 
-STARTED_AT=$(date +%s)
+# 毫秒级时间戳。BusyBox 的 date 没有 %N（只有秒），只能秒 × 1000。
+# 后端一律用 Date.now() 的毫秒做比较：写秒会让「每几秒刷一次」的心跳
+# 差 1000 倍，被算成几十年没心跳（面板会打出「已经 29896434 分钟没有心跳」），
+# 一键更新链路整条判死。这一层是协议的一部分，别改回 `date +%s`。
+now_ms() {
+  echo $(( $(date +%s) * 1000 ))
+}
+
+STARTED_AT=$(now_ms)
 JOB_ID=""
 REQUEST_ID=""
 FROM_COMMIT=""
@@ -77,7 +85,7 @@ log() {
 write_heartbeat() {
   tmp="$HEARTBEAT_FILE.tmp"
   printf '{"protocol":%s,"pid":%s,"startedAt":%s,"heartbeatAt":%s,"projectDir":"%s"}\n' \
-    "$PROTOCOL" "$$" "$STARTED_AT" "$(date +%s)" "$(json_escape "$PROJECT_DIR")" \
+    "$PROTOCOL" "$$" "$STARTED_AT" "$(now_ms)" "$(json_escape "$PROJECT_DIR")" \
     > "$tmp" && mv -f "$tmp" "$HEARTBEAT_FILE"
 }
 
@@ -91,7 +99,7 @@ write_job() {
   phase="$2"
   detail="${3:-}"
   error="${4:-}"
-  now=$(date +%s)
+  now=$(now_ms)
   [ -f "$LOG_FILE" ] || : > "$LOG_FILE"
   tmp="$JOB_FILE.tmp"
   awk -v id="$JOB_ID" -v rid="$REQUEST_ID" -v pid="$$" \
@@ -186,7 +194,7 @@ restore_owner() {
 }
 
 run_update() {
-  JOB_STARTED_AT=$(date +%s)
+  JOB_STARTED_AT=$(now_ms)
   : > "$LOG_FILE"
   if [ "${RETRY_REQUEST_ID:-}" = "$REQUEST_ID" ]; then
     log "[更新] 上一轮被中断，这一次是重试。"
