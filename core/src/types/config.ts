@@ -47,19 +47,31 @@ export interface AutomationConfig extends RanchAutomationConfig {
   skip_own_weed_bug: boolean;
   show_manual_fertilizer: boolean;
   // 以薯换福：领种子 / 分享 / 自动按好友收购价卖薯，数值项控制比价频率与分摊风险。
+  /** 总开关：关掉之后整轮不跑，哪怕下面的子开关还开着。 */
+  yishu_enabled: boolean;
   yishu_claim_seed: boolean;
   yishu_share: boolean;
   yishu_auto_sell: boolean;
   /** 小铺收购提成（好友把蜜薯卖进你的铺子产生）到账后自动领。 */
   yishu_claim_commission: boolean;
+  /** 两次领取提成之间的最小间隔（小时）：提成是累计的，不必每 10 分钟看一次。 */
+  yishu_commission_interval_hours: number;
+  /** 定时比较好友收购价；关掉之后不扫好友，只卖自己铺子。 */
+  yishu_scan_enabled: boolean;
   /** 好友铺子当天都收满时，把剩下的卖给自己铺子（不浪费已收获的蜜薯）。 */
   yishu_sell_fallback_own: boolean;
   /** 每次比价扫描的好友数量上限，好友越多单轮读请求越多。 */
   yishu_scan_friend_limit: number;
-  /** 两次比价之间的最小间隔（分钟），间隔内复用上一轮结果。 */
+  /** 两次比价之间的最小间隔（小时），间隔内复用上一轮结果。 */
+  yishu_scan_interval_hours: number;
+  /** 旧字段（分钟），只在没有 hours 的旧配置里兼容读取，界面不再展示。 */
   yishu_scan_interval_minutes: number;
   /** 背包蜜薯达到这个数量才自动卖出。 */
   yishu_sell_min_count: number;
+  /** 好友的价格至少要自家铺子高这么多（福气币/个）才卖给他，避免廉价出手。 */
+  yishu_sell_min_gain: number;
+  /** 卖薯时留在背包里的数量，0 = 全卖。 */
+  yishu_sell_keep_count: number;
   /**
    * 到点之后才开始卖薯（"HH:MM"，空串 = 不限）。
    * 不做精准卡点：过了这个时刻，之后每一轮自动任务（10 分钟）都会按原逻辑卖。

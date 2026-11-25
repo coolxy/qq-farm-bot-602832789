@@ -41,6 +41,10 @@ const YISHU_SKIP_SHOP_CODES = new Set([
 
 const DEFAULT_FRIEND_LIMIT = 60;
 const DEFAULT_SCAN_INTERVAL_MINUTES = 30;
+const DEFAULT_SCAN_INTERVAL_HOURS = 2;
+const DEFAULT_COMMISSION_INTERVAL_HOURS = 6;
+const DEFAULT_SELL_MIN_GAIN = 1;
+const DEFAULT_SELL_KEEP_COUNT = 0;
 const DEFAULT_SELL_MIN_COUNT = 1;
 /** 自动任务沿用旧余额的上限：与 activity-center 的 AUTO_BALANCE_STALE_MAX_MS 对齐。 */
 const YISHU_BALANCE_STALE_MAX_MS = 60 * 60 * 1000;
@@ -72,8 +76,29 @@ function formatMinutesOfDay(minutes: number): string {
     return `${String(Math.floor(safe / 60)).padStart(2, '0')}:${String(safe % 60).padStart(2, '0')}`;
 }
 
+/**
+ * 总开关优先：`yishu_enabled === false` 时整轮不跑，哪怕子开关还是开着的旧配置。
+ * 没写过这个字段的旧账号按「启用」处理——否则升级一次，所有账号的自动任务会静默停掉。
+ */
 function isYishuAutomationEnabled(automation: any = {}): boolean {
+    if (!automation || typeof automation !== 'object') return false;
+    if (automation.yishu_enabled === false) return false;
     return YISHU_AUTOMATION_KEYS.some(key => automation[key] === true);
+}
+
+/**
+ * 比价间隔统一折算成分钟给 scanCache 用。
+ * 优先读小时项（界面上的「比价间隔（小时）」），没有小时项的旧配置按分钟项走，
+ * 保证升级后不会因为少一个字段把间隔算成 0（每轮全量扫好友）。
+ */
+function resolveScanIntervalMinutes(automation: any = {}): number {
+    const hours = automation?.yishu_scan_interval_hours;
+    if (hours !== undefined && hours !== null && String(hours).trim() !== '')
+        return toInt(hours, DEFAULT_SCAN_INTERVAL_HOURS, 1, 48) * 60;
+    const legacyMinutes = automation?.yishu_scan_interval_minutes;
+    if (legacyMinutes !== undefined && legacyMinutes !== null && String(legacyMinutes).trim() !== '')
+        return toInt(legacyMinutes, DEFAULT_SCAN_INTERVAL_MINUTES, 5, 720);
+    return DEFAULT_SCAN_INTERVAL_HOURS * 60;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -123,6 +148,8 @@ function createYishuAutomation(deps: {
     const skipLoggedOn = new Map<string, string>();
     // 比价结果按「好友数上限 + 配置间隔」复用，避免每轮都把好友扫一遍。
     let scanCache: { at: number; limit: number; shops: any[] } | null = null;
+    // 上次成功领取提成的时间（毫秒）：0 = 还没领过，首次不受「提成领取间隔」限制。
+    let lastCommissionClaimAt = 0;
 
     function todayKey(): string {
         return new Date((getServerTimeSec() + 8 * 3600) * 1000).toISOString().slice(0, 10);
@@ -160,7 +187,10 @@ function createYishuAutomation(deps: {
     async function sellSweetPotatoes(snapshot: any, options: {
         friendLimit: number;
         scanIntervalMinutes: number;
+        scanEnabled: boolean;
         sellMinCount: number;
+        keepCount: number;
+        minGain: number;
         fallbackOwn: boolean;
     }): Promise<void> {
         const bag = readSweetPotatoCount(snapshot);
@@ -170,13 +200,21 @@ function createYishuAutomation(deps: {
             skip('sell', `这次没读到背包蜜薯数量${reason ? `（${reason}）` : ''}，下一轮再试`);
             return;
         }
-        let remaining = BigInt(bag.count || '0');
-        if (remaining <= 0n) {
+        const bagCount = BigInt(bag.count || '0');
+        if (bagCount <= 0n) {
             skip('sell', '背包里还没有蜜薯，等红薯成熟收获后自动卖');
             return;
         }
-        if (remaining < BigInt(options.sellMinCount)) {
-            skip('sell', `背包只有 ${remaining} 个蜜薯，未达到自动卖出阈值 ${options.sellMinCount}`);
+        // 保留数量先扣掉：可卖的是「背包 - 保留」，阈值也按可卖量判，
+        // 否则「保留 100 个」时背包 100 个会被当成「够卖了」而立刻触发一次卖出。
+        const keepCount = BigInt(Math.max(0, options.keepCount));
+        const sellable = bagCount - keepCount;
+        if (sellable <= 0n) {
+            skip('sell', `背包 ${bagCount} 个蜜薯没超过保留数量 ${keepCount}，这一轮不卖`);
+            return;
+        }
+        if (sellable < BigInt(options.sellMinCount)) {
+            skip('sell', `可卖 ${sellable} 个蜜薯（背包 ${bagCount}，保留 ${keepCount}），未达到自动卖出阈值 ${options.sellMinCount}`);
             return;
         }
         if (!snapshot?.shop?.priceKnown) {
@@ -185,19 +223,61 @@ function createYishuAutomation(deps: {
         }
 
         let shops: any[];
-        try {
-            shops = await rankedShops(options.friendLimit, options.scanIntervalMinutes);
+        if (!options.scanEnabled) {
+            // 关掉「定时比较好友收购价」之后手上没有好友报价，只能卖自己的铺子；
+            // 而自家铺子不限额度（服务端不会回 quota 限制），所以用 unlimited 标记跳过额度判断。
+            if (!options.fallbackOwn) {
+                skip('sell', '已关闭好友比价、也没开启卖给自己铺子，这一轮不卖');
+                return;
+            }
+            shops = [{
+                gid: null,
+                own: true,
+                name: '我的铺子',
+                unlimited: true,
+                totalPrice: String(snapshot?.shop?.estimatedPrice || snapshot?.shop?.price || '0'),
+                quota: null,
+                canSell: null,
+            }];
         }
-        catch (e: any) {
-            failed('scan', `好友铺子比价失败: ${e?.message || e}`);
-            return;
+        else {
+            try {
+                shops = await rankedShops(options.friendLimit, options.scanIntervalMinutes);
+            }
+            catch (e: any) {
+                failed('scan', `好友铺子比价失败: ${e?.message || e}`);
+                return;
+            }
         }
-        const candidates = options.fallbackOwn ? shops : shops.filter((shop: any) => !shop.own);
+
+        // 自家价作为基准：优先用本轮扫到的自家铺子报价，没有就用快照里的今日成交价。
+        let ownPrice: bigint | null = null;
+        const ownShop = shops.find((shop: any) => shop.own);
+        const ownPriceText = String(ownShop?.totalPrice ?? snapshot?.shop?.estimatedPrice ?? snapshot?.shop?.price ?? '');
+        if (/^\d+$/.test(ownPriceText)) ownPrice = BigInt(ownPriceText);
+        const minGain = BigInt(Math.max(0, options.minGain));
+
+        let filteredByGain = 0;
+        const candidates = shops.filter((shop: any) => {
+            // 自家铺子只由 fallbackOwn 决定：不存在「比自己高」的比较。
+            if (shop.own) return options.fallbackOwn;
+            if (ownPrice !== null && minGain > 0n) {
+                const price = /^\d+$/.test(String(shop.totalPrice ?? '')) ? BigInt(shop.totalPrice) : 0n;
+                if (price < ownPrice + minGain) {
+                    filteredByGain += 1;
+                    return false;
+                }
+            }
+            return true;
+        });
         if (!candidates.length) {
-            skip('sell', shops.length ? '只把自己的铺子留在候选里，但已关闭卖给自己' : '没有可卖的好友铺子');
+            if (filteredByGain > 0)
+                skip('sell', `${filteredByGain} 家好友的收购价都没比自家（${ownPrice} + ${minGain}）更高，这一轮不卖`);
+            else skip('sell', shops.length ? '只把自己的铺子留在候选里，但已关闭卖给自己' : '没有可卖的好友铺子');
             return;
         }
 
+        let remaining = sellable;
         let switched = 0;
         let wrote = false;
         const spacing = async (): Promise<void> => { if (wrote) await sleep(YISHU_STEP_SPACER_MS); };
@@ -209,7 +289,8 @@ function createYishuAutomation(deps: {
                 skip('sell', `${shop.own ? '自己的铺子' : shop.name || shop.gid} 当前不收蜜薯，换下一家`);
                 continue;
             }
-            const quota = BigInt(shop.quota || '0');
+            // 自家铺子不限额度：一次把可卖的全卖进去（服务端会按实际接收量回 count）。
+            const quota = shop.unlimited ? remaining : BigInt(shop.quota || '0');
             if (quota <= 0n) {
                 skip('sell', `${shop.own ? '自己的铺子' : shop.name || shop.gid} 今日额度已用完，换下一家`);
                 continue;
@@ -247,6 +328,9 @@ function createYishuAutomation(deps: {
     }
 
     async function runYishuAutomation(automation: any = {}): Promise<void> {
+        // 总开关关掉就整轮不跑：调度器已经拦过一次，这里再拦一次，
+        // 保证「直接调 runYishuAutomation」的路径（手动触发 / 测试）行为一致。
+        if (automation.yishu_enabled === false) return;
         const claimSeedEnabled = automation.yishu_claim_seed === true;
         const shareEnabled = automation.yishu_share === true;
         const commissionEnabled = automation.yishu_claim_commission === true;
@@ -303,6 +387,10 @@ function createYishuAutomation(deps: {
             // 出售时间闸门：知道配置值、当前是否放行，才能解释「有蜜薯为什么不卖」。
             sellAfter: sellAfterLabel || '不限',
             sellGateOpen,
+            // 保留量与最小价差同样是「为什么没卖」的常见原因，一并写进摘要。
+            sellKeep: toInt(automation.yishu_sell_keep_count, DEFAULT_SELL_KEEP_COUNT, 0, 100000),
+            sellMinGain: toInt(automation.yishu_sell_min_gain, DEFAULT_SELL_MIN_GAIN, 0, 100000),
+            scanEnabled: automation.yishu_scan_enabled !== false,
         });
 
         let wrote = false;
@@ -359,8 +447,11 @@ function createYishuAutomation(deps: {
         else if (sellEnabled) {
             await sellSweetPotatoes(snapshot, {
                 friendLimit: toInt(automation.yishu_scan_friend_limit, DEFAULT_FRIEND_LIMIT, 1, 200),
-                scanIntervalMinutes: toInt(automation.yishu_scan_interval_minutes, DEFAULT_SCAN_INTERVAL_MINUTES, 5, 720),
+                scanIntervalMinutes: resolveScanIntervalMinutes(automation),
+                scanEnabled: automation.yishu_scan_enabled !== false,
                 sellMinCount: toInt(automation.yishu_sell_min_count, DEFAULT_SELL_MIN_COUNT, 1, 10000),
+                keepCount: toInt(automation.yishu_sell_keep_count, DEFAULT_SELL_KEEP_COUNT, 0, 100000),
+                minGain: toInt(automation.yishu_sell_min_gain, DEFAULT_SELL_MIN_GAIN, 0, 100000),
                 fallbackOwn: automation.yishu_sell_fallback_own !== false,
             });
         }
@@ -369,14 +460,23 @@ function createYishuAutomation(deps: {
         // 而且它是纯收钱动作，卖薯中途失败也不该漏掉。
         if (commissionEnabled) {
             const pending = BigInt(snapshot?.commission?.pending || '0');
+            const intervalHours = toInt(automation.yishu_commission_interval_hours, DEFAULT_COMMISSION_INTERVAL_HOURS, 1, 48);
+            // 提成是累计金额：间隔内即使有余额也先不动，避免每 10 分钟一次无谓的写请求。
+            // 首次执行（lastCommissionClaimAt=0）不受间隔限制，登录后能立刻收一次。
+            const sinceLastClaimMs = lastCommissionClaimAt ? Date.now() - lastCommissionClaimAt : Infinity;
             if (!snapshot?.commission?.claimable || pending <= 0n) {
                 skip('commission', '当前没有可领取的收购提成');
+            }
+            else if (sinceLastClaimMs < intervalHours * 3600 * 1000) {
+                const waitMinutes = Math.max(1, Math.ceil((intervalHours * 3600 * 1000 - sinceLastClaimMs) / 60000));
+                skip('commission', `还有 ${pending} 福气币提成可领，但距上次领取不足 ${intervalHours} 小时（约 ${waitMinutes} 分钟后再看）`);
             }
             else {
                 await spacing();
                 try {
                     const result = await claimCommission({ withSnapshot: false });
                     wrote = true;
+                    lastCommissionClaimAt = Date.now();
                     const amount = String(result?.amount ?? '0');
                     const balance = result?.balance ? `，当前福气币 ${result.balance}` : '';
                     done('commission', amount === '0' ? '没有可领取的提成' : `领取收购提成 ${amount} 福气币${balance}`);

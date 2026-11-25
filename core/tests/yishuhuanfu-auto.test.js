@@ -485,3 +485,126 @@ test('没配开始售卖时间时保持随时可卖', async () => {
     const summary = harness.logs.find(entry => entry.message === '以薯换福自动本轮开始');
     assert.equal(summary.meta.sellAfter, '不限');
 });
+
+// ---------- 面板配置项（对齐 v1.0.2 的脚本配置） ----------
+
+test('总开关关掉时整轮不跑，哪怕子开关还开着', async () => {
+    const automation = { ...ALL_ON, yishu_enabled: false };
+    assert.equal(isYishuAutomationEnabled(automation), false);
+    // 没写过这个字段的旧配置按启用处理，避免升级后自动任务静默停掉。
+    assert.equal(isYishuAutomationEnabled({ yishu_share: true }), true);
+
+    const harness = createHarness({
+        snapshot: makeSnapshot({ sweetPotatoBalance: '10' }),
+        shops: [makeShop({ quota: '1000' })],
+    });
+    await harness.automation.runYishuAutomation(automation);
+    assert.equal(harness.calls.length, 0);
+});
+
+test('保留蜜薯数量先从可卖量里扣掉，再判起卖阈值', async () => {
+    const harness = createHarness({
+        snapshot: makeSnapshot({ sweetPotatoBalance: '10' }),
+        shops: [makeShop({ quota: '1000' })],
+    });
+    await harness.automation.runYishuAutomation({ ...ALL_ON, yishu_sell_keep_count: 8 });
+
+    assert.deepEqual(harness.sells().map(entry => entry[2]), ['2']);
+});
+
+test('可卖量不超过保留数量时一个都不卖', async () => {
+    const harness = createHarness({
+        snapshot: makeSnapshot({ sweetPotatoBalance: '5' }),
+        shops: [makeShop({ quota: '1000' })],
+    });
+    await harness.automation.runYishuAutomation({ ...ALL_ON, yishu_sell_keep_count: 5 });
+
+    assert.equal(harness.sells().length, 0);
+    assert.equal(harness.calls.filter(entry => entry[0] === 'scanFriends').length, 0);
+    assert.ok(harness.logs.some(entry => entry.message.includes('没超过保留数量')));
+});
+
+test('好友收购价不够「至少比自家高」时留给下一家', async () => {
+    const shops = [
+        // 自家 144，好友 150 只高 6，要求至少高 10 → 跳过；另一家 160 合格。
+        makeShop({ gid: '2001', name: '甲', totalPrice: '150', quota: '1000' }),
+        makeShop({ gid: '2002', name: '乙', totalPrice: '160', quota: '1000' }),
+    ];
+    const harness = createHarness({
+        snapshot: makeSnapshot({ sweetPotatoBalance: '10' }),
+        shops,
+    });
+    await harness.automation.runYishuAutomation({ ...ALL_ON, yishu_sell_min_gain: 10 });
+
+    assert.deepEqual(harness.sells().map(entry => entry[1]), ['2002']);
+});
+
+test('所有好友都达不到最小价差时本轮不卖，并说明原因', async () => {
+    const harness = createHarness({
+        snapshot: makeSnapshot({ sweetPotatoBalance: '10' }),
+        shops: [makeShop({ gid: '2001', totalPrice: '150', quota: '1000' })],
+    });
+    await harness.automation.runYishuAutomation({ ...ALL_ON, yishu_sell_min_gain: 10 });
+
+    assert.equal(harness.sells().length, 0);
+    assert.ok(harness.logs.some(entry => entry.message.includes('都没比自家')));
+});
+
+test('比价间隔按小时配置，窗口内复用上一轮结果', async () => {
+    const harness = createHarness({
+        snapshot: makeSnapshot({ sweetPotatoBalance: '10' }),
+        shops: [makeShop({ quota: '1000' })],
+    });
+    const automation = { ...ALL_ON, yishu_scan_interval_hours: 2 };
+    await harness.automation.runYishuAutomation(automation);
+    harness.setSnapshot(makeSnapshot({ sweetPotatoBalance: '10' }));
+    await harness.automation.runYishuAutomation(automation);
+
+    assert.equal(harness.calls.filter(entry => entry[0] === 'scanFriends').length, 1);
+});
+
+test('关闭定时比价后不扫好友，只卖自己铺子', async () => {
+    const harness = createHarness({
+        snapshot: makeSnapshot({ sweetPotatoBalance: '10' }),
+        shops: [makeShop({ gid: '2001', quota: '1000' })],
+    });
+    await harness.automation.runYishuAutomation({ ...ALL_ON, yishu_scan_enabled: false });
+
+    assert.equal(harness.calls.filter(entry => entry[0] === 'scanFriends').length, 0);
+    assert.deepEqual(harness.sells().map(entry => entry[1]), [null]);
+    assert.deepEqual(harness.sells().map(entry => entry[2]), ['10']);
+});
+
+test('关闭定时比价且不允许卖自己时本轮不卖', async () => {
+    const harness = createHarness({
+        snapshot: makeSnapshot({ sweetPotatoBalance: '10' }),
+        shops: [makeShop({ quota: '1000' })],
+    });
+    await harness.automation.runYishuAutomation({
+        ...ALL_ON,
+        yishu_scan_enabled: false,
+        yishu_sell_fallback_own: false,
+    });
+
+    assert.equal(harness.sells().length, 0);
+    assert.ok(harness.logs.some(entry => entry.message.includes('已关闭好友比价')));
+});
+
+test('提成按配置的间隔节流：首次领，间隔内不重复领', async () => {
+    const harness = createHarness({
+        snapshot: makeSnapshot({
+            commission: { pending: '86', claimable: true, flag: '1' },
+        }),
+    });
+    const automation = {
+        yishu_claim_commission: true,
+        yishu_commission_interval_hours: 6,
+    };
+
+    await harness.automation.runYishuAutomation(automation);
+    assert.equal(harness.calls.filter(entry => entry[0] === 'claimCommission').length, 1);
+
+    await harness.automation.runYishuAutomation(automation);
+    assert.equal(harness.calls.filter(entry => entry[0] === 'claimCommission').length, 1);
+    assert.ok(harness.logs.some(entry => entry.message.includes('距上次领取不足 6 小时')));
+});

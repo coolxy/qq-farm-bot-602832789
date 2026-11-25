@@ -509,45 +509,116 @@ const ranchFeedStages = [
             </div>
           </div>
 
-          <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <div class="automation-setting-item">
-              <BaseSwitch v-model="settings.automation.yishu_claim_seed" label="每日自动领取红薯种子" />
-            </div>
-            <div class="automation-setting-item">
-              <BaseSwitch v-model="settings.automation.yishu_share" label="每日自动分享铺子（触发暴击涨价）" />
-            </div>
-            <div class="automation-setting-item">
-              <BaseSwitch v-model="settings.automation.yishu_claim_commission" label="自动领取小铺收购提成" />
-            </div>
-            <div class="automation-setting-item sm:col-span-2">
-              <BaseSwitch v-model="settings.automation.yishu_auto_sell" label="红薯成熟后自动卖薯（按好友收购价从高到低）" />
-            </div>
+          <div class="automation-setting-item">
+            <BaseSwitch v-model="settings.automation.yishu_enabled" label="启用以薯换福自动任务" />
           </div>
 
-          <div v-if="settings.automation.yishu_auto_sell" class="mt-3 rounded-lg bg-gray-50 p-3 space-y-3 dark:bg-gray-800/60">
-            <div class="text-sm text-gray-800 font-medium dark:text-gray-200">
-              卖薯比价
+          <div v-if="settings.automation.yishu_enabled !== false" class="mt-3 space-y-4">
+            <div>
+              <div class="mb-2 text-sm text-gray-800 font-medium dark:text-gray-200">
+                每日种子与暴击
+              </div>
+              <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <div class="automation-setting-item">
+                  <BaseSwitch v-model="settings.automation.yishu_claim_seed" label="每日领取红薯种子" />
+                </div>
+                <div class="automation-setting-item">
+                  <BaseSwitch v-model="settings.automation.yishu_share" label="每日触发分享暴击" />
+                </div>
+              </div>
             </div>
-            <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <BaseInput v-model.number="settings.automation.yishu_scan_friend_limit" label="参与比价的好友数上限" type="number" min="1" max="200" />
-              <BaseInput v-model.number="settings.automation.yishu_scan_interval_minutes" label="两次比价间隔 (分钟)" type="number" min="5" max="720" />
-              <BaseInput v-model.number="settings.automation.yishu_sell_min_count" label="起卖数量 (个)" type="number" min="1" max="10000" />
-              <BaseSelect
-                v-model="settings.automation.yishu_sell_after_time"
-                label="开始售卖时间"
-                :options="sellTimeOptions"
-              />
+
+            <div>
+              <div class="mb-2 text-sm text-gray-800 font-medium dark:text-gray-200">
+                小铺提成
+              </div>
+              <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <div class="automation-setting-item">
+                  <BaseSwitch v-model="settings.automation.yishu_claim_commission" label="定时领取小铺提成" />
+                </div>
+                <BaseInput
+                  v-model.number="settings.automation.yishu_commission_interval_hours"
+                  label="提成领取间隔 (小时)"
+                  type="number"
+                  min="1"
+                  max="48"
+                />
+              </div>
             </div>
-            <BaseSwitch v-model="settings.automation.yishu_sell_fallback_own" label="好友铺子都收满时，剩下的卖给自己铺子" />
-            <p class="text-xs text-gray-500 dark:text-gray-400">
-              「开始售卖时间」不是精准卡点：选了 23:00，就是过了 23:00 之后每一轮自动任务（10 分钟一次）都按下面的逻辑卖，
-              校验、比价、额度判断完全不变。等晚一点的好处是好友当天基本都分享过、暴击加成已经加上，价格排在前面；
-              代价是高价铺子的额度可能被别人先吃满，届时会按价格往下找。留空表示不限时段。
-            </p>
+
+            <div>
+              <div class="mb-2 text-sm text-gray-800 font-medium dark:text-gray-200">
+                好友比价与出售
+              </div>
+              <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <div class="automation-setting-item">
+                  <BaseSwitch v-model="settings.automation.yishu_scan_enabled" label="定时比较好友收购价" />
+                </div>
+                <BaseInput
+                  v-model.number="settings.automation.yishu_scan_interval_hours"
+                  label="比价间隔 (小时)"
+                  type="number"
+                  min="1"
+                  max="48"
+                />
+                <div class="automation-setting-item">
+                  <BaseSwitch v-model="settings.automation.yishu_auto_sell" label="晚间卖给价更高的好友" />
+                </div>
+                <BaseSelect
+                  v-model="settings.automation.yishu_sell_after_time"
+                  label="出售时间"
+                  :options="sellTimeOptions"
+                />
+                <BaseInput
+                  v-model.number="settings.automation.yishu_sell_min_gain"
+                  label="至少比自家高 (福气币/个)"
+                  type="number"
+                  min="0"
+                  max="100000"
+                />
+                <BaseInput
+                  v-model.number="settings.automation.yishu_sell_keep_count"
+                  label="保留蜜薯数量 (个)"
+                  type="number"
+                  min="0"
+                  max="100000"
+                />
+              </div>
+            </div>
+
+            <div class="rounded-lg bg-gray-50 p-3 space-y-3 dark:bg-gray-800/60">
+              <div class="text-sm text-gray-800 font-medium dark:text-gray-200">
+                比价范围与兜底
+              </div>
+              <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <BaseInput
+                  v-model.number="settings.automation.yishu_scan_friend_limit"
+                  label="参与比价的好友数上限"
+                  type="number"
+                  min="1"
+                  max="200"
+                />
+                <BaseInput
+                  v-model.number="settings.automation.yishu_sell_min_count"
+                  label="起卖数量 (个)"
+                  type="number"
+                  min="1"
+                  max="10000"
+                />
+              </div>
+              <BaseSwitch v-model="settings.automation.yishu_sell_fallback_own" label="好友铺子都收满时，剩下的卖给自己铺子" />
+              <p class="text-xs text-gray-500 dark:text-gray-400">
+                「出售时间」不是精准卡点：选了 23:00，就是过了 23:00 之后每一轮自动任务（10 分钟一次）都按同样的逻辑卖。
+                等晚一点的好处是好友当天基本都分享过、暴击加成已经加上，价格排在前面；
+                代价是高价铺子的额度可能被别人先吃满，届时会按价格往下找。留空表示不限时段。
+              </p>
+            </div>
           </div>
 
           <p class="mt-3 text-xs text-gray-500 dark:text-gray-400">
-            10 分钟检查一次：今日还没领种子、还没分享才各发一次写，服务端已经标记过的只按天记一行跳过日志。背包里蜜薯达到「起卖数量」才进入比价，比价（cmd 92 逐个查铺子）按「两次比价间隔」节流，间隔内复用上一轮的排序，不会每轮都把候选铺子扫一遍。
+            10 分钟检查一次：今日还没领种子、还没分享才各发一次写，服务端已经标记过的只按天记一行跳过日志。提成按「提成领取间隔」节流，间隔内有余额也先不动。
+            背包蜜薯达到「起卖数量」才进入比价：先扣掉「保留蜜薯数量」，再要求好友价格至少比自家高「至少比自家高」个福气币，
+            比价（cmd 92 逐个查铺子）按「比价间隔」节流，间隔内复用上一轮的排序；关闭「定时比较好友收购价」后不再扫好友，只卖自己铺子。
           </p>
           <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
             候选池不再只有本账号好友：面板里每个账号同步下来的好友 GID 都会并进来（蜜薯本来就能卖给非好友，只要对方开着铺子）。候选超过上限时按轮换窗口扫，几轮下来能覆盖全部。卖薯按成交价（基础价 + 加成）从高到低贪心：最高价那家额度够就卖给它，不够就吃满额度再换第二高；单轮最多切 3 家铺子、笔间隔 1200ms，剩下的留到下一轮。

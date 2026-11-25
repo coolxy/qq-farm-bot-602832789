@@ -76,16 +76,26 @@ const DEFAULT_ACCOUNT_CONFIG: AccountConfig = {
         ...RANCH_AUTOMATION_DEFAULTS,
         // 默认只做「领种子 + 分享」这两件零风险的事；自动卖薯要动别人的铺子额度，
         // 默认也开，但好友都收满时默认兜底卖给自己，避免一批蜜薯烂在背包里。
+        yishu_enabled: true,
         yishu_claim_seed: true,
         yishu_share: true,
         yishu_auto_sell: true,
         yishu_claim_commission: true,
+        // 提成是累计金额，6 小时看一次足够；每 10 分钟查一次只是白花读请求。
+        yishu_commission_interval_hours: 6,
+        yishu_scan_enabled: true,
         yishu_sell_fallback_own: true,
         yishu_scan_friend_limit: 20,
+        // 比价按小时节流：一轮扫描就要遍历几十家铺子，2 小时内复用结果。
+        yishu_scan_interval_hours: 2,
         yishu_scan_interval_minutes: 30,
         yishu_sell_min_count: 1,
-        // 空串 = 不限时段，和改造前的行为一致；填了 "HH:MM" 就等过了这个点才卖。
-        yishu_sell_after_time: '',
+        // 好友只比自己高 0~1 个福气币时不值得换铺子，默认要求至少高 1。
+        yishu_sell_min_gain: 1,
+        yishu_sell_keep_count: 0,
+        // 默认等到 23:00 再卖：此时好友当天基本都分享过、暴击加成已经加上。
+        // 留空表示不限时段（旧行为），填 "HH:MM" 就是过了这个点才卖。
+        yishu_sell_after_time: '23:00',
         farm: true,
         farm_harvest_tiangong: true,
         farm_push: true,
@@ -471,8 +481,12 @@ function normalizeIntervals(intervals: Partial<IntervalConfig> | undefined): Int
  */
 const YISHU_NUMERIC_RANGES: Record<string, [number, number]> = {
     yishu_scan_friend_limit: [1, 200],
+    yishu_scan_interval_hours: [1, 48],
     yishu_scan_interval_minutes: [5, 720],
+    yishu_commission_interval_hours: [1, 48],
     yishu_sell_min_count: [1, 10000],
+    yishu_sell_min_gain: [0, 100000],
+    yishu_sell_keep_count: [0, 100000],
 };
 
 /**
