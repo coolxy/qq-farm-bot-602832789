@@ -16,6 +16,7 @@ function loadTransport({ unlocked = true, globalSceneId = 1, restoreFails = fals
         getUserState: () => ({ unlockedSceneIds: unlocked ? [1, 2] : [1], globalSceneId: scene }),
         getWs: () => socket,
         invalidateGameScene: reason => events.push({ kind: 'invalidate', reason }),
+        markGameSceneUnknown: reason => { events.push({ kind: 'mark_unknown', reason }); scene = 0; },
         sendMsgAsync: async (service, method, body, options = {}) => {
             events.push({ kind: 'attempt', service, method });
             // 与 network.sendMsg 一致：beforeSend 返回错误即拒绝，包发出后才回调 onSent。
@@ -83,14 +84,25 @@ test('已经位于牧场场景时不重复登录，也不做恢复', async () =>
     assert.deepEqual(h.events, []);
 });
 
-test('场景恢复失败要标记重新登录，并把结果标成未确认', async () => {
+test('场景恢复失败只降级场景状态，绝不切断连接', async () => {
     const h = loadTransport({ globalSceneId: 1, restoreFails: true });
     const { result } = await h.enterScene();
     assert.equal(result.sceneRestored, false);
-    assert.equal(result.refreshRequired, true);
-    assert.match(result.notice, /重新登录/);
-    assert.ok(h.events.some(e => e.kind === 'invalidate'), '未确认的场景必须失效，避免后续操作沿用错误状态');
+    assert.equal(result.refreshRequired, true, '让面板重拉一次数据核对，不代表需要重新登录');
+    assert.match(result.notice, /自动重新进入/);
+    assert.doesNotMatch(result.notice, /重新登录/, '连接还在线，不能提示用户去重新扫码');
+    assert.ok(h.events.some(e => e.kind === 'mark_unknown'), '场景必须标记为未知，避免后续操作沿用错误状态');
+    // QQ 只有一次性 Code：在牧场抖一下就 terminate，等于把账号踢成永久离线。
+    assert.ok(!h.events.some(e => e.kind === 'invalidate'), '场景没恢复不代表连接已死，不得断连');
     assert.ok(h.events.some(e => e.kind === 'warn'));
+});
+
+test('场景标记未知后再次进牧场，恢复目标必须是农场而不是场景 0', async () => {
+    const h = loadTransport({ globalSceneId: 0 });
+    const { result, cells } = await h.enterScene();
+    assert.deepEqual(cells, CELL_FIXTURE);
+    assert.equal(result.sceneRestored, undefined, '正常路径不该标未确认');
+    assert.deepEqual(h.events.map(e => [e.kind, e.id]), [['login', 2], ['login', 1]]);
 });
 
 test('操作期间断线重连后不再补发场景恢复', async () => {

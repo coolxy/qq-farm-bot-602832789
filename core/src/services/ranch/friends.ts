@@ -69,8 +69,9 @@ async function withFriendVisit(hostGid: unknown, run: (entry: any, host: string)
                     await runWithSendContext({ check: () => null, onSent: () => {} }, () => rpc('leaveFriend', { host_gid: host }));
                 } catch (error: any) {
                     logWarn('牧场', `离开好友牧场失败：${error.message}`, { module: 'ranch', event: 'ranch_friend_leave' });
-                    network.invalidateGameScene('好友牧场离场未确认，需要重新登录');
-                    if (result) Object.assign(result, { sceneRestored: false, refreshRequired: true, notice: '好友牧场离场未确认，账号需重新登录；请核对操作结果' });
+                    // 同样只降级场景状态，不断连接：QQ 的一次性 Code 经不起一次误判。
+                    network.markGameSceneUnknown('好友牧场离场未确认，已保留连接待下次重进');
+                    if (result) Object.assign(result, { sceneRestored: false, refreshRequired: true, notice: '好友牧场离场未确认，下次操作前会自动重新进入；连接保持在线' });
                 }
             }
         }

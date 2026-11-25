@@ -1916,6 +1916,28 @@ function cleanup(reason = '网络清理'): void {
 
 function getWs(): WebSocket | null { return ws; }
 
+/**
+ * 只把「当前场景」标记为未知，保留连接。
+ *
+ * 牧场是全项目唯一会切场景的业务（进牧场 → 干活 → 切回农场）。切回失败时，
+ * 连接本身往往还是健康的：心跳、ACE、其它业务回包都正常，只是那条
+ * PlayerSceneLogin 没拿到回包。此时直接 terminate 的代价在两端并不对称：
+ *   - 微信有 loginBuffer / refreshtoken，60 秒能换票回来，用户几乎无感；
+ *   - QQ 只有一次性 Code，断一次就要外部补票，在容器里表现为「跑一会儿就掉线」。
+ *
+ * 连接到底死没死交给心跳判断（漏拍 + 静默双条件），这里只做场景降级：
+ * 下一次牧场操作会重新 loginGameScene(2)，成功后 globalSceneId 自然复位。
+ */
+function markGameSceneUnknown(reason = '游戏场景状态未知，已保留连接待下次重新进入'): void {
+    if (userState.globalSceneId === 0) return;
+    userState.globalSceneId = 0;
+    logWarn('牧场', reason);
+}
+
+/**
+ * 连接已不可用时的兜底：结束连接，交给主进程补 Code 重登。
+ * 只有确认「这条连接已经废了」才该走这里；场景状态对不上不算。
+ */
 function invalidateGameScene(reason = '游戏场景状态未知，需要重新登录'): void {
     const context = currentConnection;
     if (!context) return;
@@ -1930,7 +1952,7 @@ module.exports = {
     getGatewayLoad, isGatewayIdleForBackground, waitForGatewayIdle,
     getInboundSilenceMs, isGatewayStalling,
     GatewayError, GatewayBusyError,
-    getUserState, loginGameScene, invalidateGameScene, applyShareInfos, getDailyShareInfo,
+    getUserState, loginGameScene, invalidateGameScene, markGameSceneUnknown, applyShareInfos, getDailyShareInfo,
     getWsErrorState,
     networkEvents,
 };

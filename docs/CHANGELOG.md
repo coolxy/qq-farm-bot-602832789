@@ -15,6 +15,7 @@
 
 | 版本 | 更新序号 | 日期 | 更新内容 | 提交 |
 | --- | --- | --- | --- | --- |
+| v3.39.10 | #277 | 2026-11-26 | 常规更新 | — |
 | v3.39.9 | #276 | 2026-11-26 | 同步上游以薯换福自动卖薯修复与自定义开始时间 | — |
 | v3.39.8 | #275 | 2026-11-26 | 常规更新 | — |
 | v3.39.7 | #273 | 2026-11-26 | 常规更新 | — |
@@ -263,6 +264,33 @@ flowchart TB
 ```
 
 ## 详细记录
+
+### 2026-11-26 · v3.39.10（#277） · 牧场场景恢复失败不再误判断连，单拍心跳不直接降到 stall
+
+**一、问题定位（来自 NAS 容器日志）**
+
+QQ 账号在容器里「登录一会儿就掉线」，日志给的是 `source=game_scene_unknown`：`牧场操作结束后场景恢复未确认，需要重新登录`，`connectionAgeMs=780004`（在线满 13 分钟后断）。断连瞬间 `heartbeatMisses=2`、`lastInboundAgeMs=40015`、`requestBudget.mode=stall`（`autoSentInWindow=143` 而 stall 限额 24）。
+
+两条因果链叠在一起：
+
+- 牧场是全项目唯一切场景的业务（`inScene`：`loginGameScene(2)` → 干活 → `loginGameScene(previous)`）。容器弱 CPU + 网络抖动下这条恢复请求超时，`transport.ts` 在 `finally` 里直接 `invalidateGameScene()` → `terminate()`——**场景没切回来，被当成连接已死**。
+- 请求量一上来先漏一拍心跳，`classifyHealth` 的 `misses > 0` 立刻把整个账号降到 `stall`（自动任务限额 180 → 24），排队更堵、下一拍更容易丢，形成「抖动 → 降级 → 更堵」的正反馈。
+
+代价在两端并不对称：微信有 `loginBuffer` / `refreshtoken`，断了 60 秒换票回来，面板上看不出来；QQ 只有一次性 Code，断一次就要外部补票。所以只有 QQ 表现为「掉线」，也只有容器这种慢环境能稳定复现。
+
+**二、改动**
+
+- `utils/network.ts`：新增 `markGameSceneUnknown()`，只把 `userState.globalSceneId` 置 0（场景未知），**不动连接**；`invalidateGameScene()` 保留，仅作为连接确实不可用时的兜底。连接死活交给心跳（漏拍 + 静默双条件）判断，职责不再混在一起。
+- `services/ranch/transport.ts`：恢复失败改调 `markGameSceneUnknown()`；`previous` 做 `0 → 1` 兜底，避免把 0 当场景 id 发 `PlayerSceneLogin`；静默 > 15 秒时跳过一次重试（但不再 terminate）。
+- `services/ranch/friends.ts`：好友牧场离场失败同样只降级场景状态，不断连接。
+- `utils/request-governor.ts`：`misses >= 2` 才进 `stall`，单拍失败只降到 `cautious`。
+
+`refreshRequired` 在项目里的语义是「让面板重拉一次数据核对」，不是「要求重新登录」，因此保留 `true`，只把 notice 文案改成「下次牧场操作前会自动重新进入；连接保持在线」。
+
+**三、验证**
+
+- `pnpm build:core` 通过；core **1137 条全绿**（新增「场景未知后按农场 1 恢复」「单拍心跳只到 cautious」两条），web 380 条全绿。
+- 回归测试钉住新语义：场景恢复失败**不得**产生 `invalidate`，否则 QQ 会因为牧场一次抖动被踢成永久离线。
 
 ### 2026-11-26 · v3.39.9（#276） · 同步上游以薯换福自动卖薯修复与自定义开始时间
 

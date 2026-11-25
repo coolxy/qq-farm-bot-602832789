@@ -77,7 +77,10 @@ function isUnlocked(): boolean {
 function inScene(run: (cells: any) => Promise<any>): Promise<any> {
     return runExclusiveAutomationTask('ranch.scene', async () => {
         if (!isUnlocked()) throw error('RANCH_LOCKED', '牧场尚未解锁，请先在游戏中完成开启条件');
-        const previous = network.getUserState().globalSceneId;
+        const knownScene = network.getUserState().globalSceneId;
+        // 0 表示上一次恢复失败留下的「场景未知」标记。按农场（1）恢复，
+        // 不能把 0 当成场景 id 发 PlayerSceneLogin。
+        const previous = knownScene === 2 ? 2 : 1;
         const socket = network.getWs();
         let result: any;
         try {
@@ -94,11 +97,11 @@ function inScene(run: (cells: any) => Promise<any>): Promise<any> {
                     await restore();
                 } catch (firstError: any) {
                     restoreError = firstError;
-                    // 连接已经很久没有入站数据（心跳也收不到）时重试只会再拖 20 秒，
-                    // 直接判死走重登更快恢复；只有「连接还有心跳、只是单次请求超时」才值得重试。
+                    // 连接已经很久没有入站数据时，重试只会再白等一个超时；
+                    // 但也不要在这里 terminate——连接死活交给心跳判，见下面的说明。
                     const silenceMs = Number(network.getInboundSilenceMs?.() || 0);
                     if (silenceMs > 15000) {
-                        logWarn('牧场', `恢复场景 ${previous} 失败（连接已静默 ${Math.round(silenceMs / 1000)} 秒）：${firstError.message}`, { module: 'ranch', event: 'ranch_scene_restore' });
+                        logWarn('牧场', `恢复场景 ${previous} 失败（连接已静默 ${Math.round(silenceMs / 1000)} 秒），跳过重试交由心跳判活：${firstError.message}`, { module: 'ranch', event: 'ranch_scene_restore' });
                     } else {
                         logWarn('牧场', `恢复场景 ${previous} 首次失败，1.5 秒后重试：${firstError.message}`, { module: 'ranch', event: 'ranch_scene_restore_retry' });
                         await new Promise(resolve => setTimeout(resolve, 1500));
@@ -117,8 +120,13 @@ function inScene(run: (cells: any) => Promise<any>): Promise<any> {
                     }
                 }
                 if (restoreError) {
-                    network.invalidateGameScene('牧场操作结束后场景恢复未确认，需要重新登录');
-                    if (result) Object.assign(result, { sceneRestored: false, refreshRequired: true, notice: '场景恢复未确认，账号需重新登录；请刷新核对操作结果' });
+                    // 场景没切回来 ≠ 连接已死：这里只把场景标记为未知，连接继续用。
+                    // 直接 terminate 的代价两端不对称——微信有续期凭证 60 秒能回来，
+                    // QQ 只有一次性 Code，牧场抖一下就要人工补票（容器里表现为「跑一会儿就掉线」）。
+                    // 真正不可用的连接会在心跳漏拍 + 静默双条件满足时被判死，那条路径更明确。
+                    network.markGameSceneUnknown('牧场操作结束后场景恢复未确认，已保留连接待下次重进');
+                    // refreshRequired 在本项目里的语义是「让面板重拉一次数据核对结果」，不是「要求重新登录」。
+                    if (result) Object.assign(result, { sceneRestored: false, refreshRequired: true, notice: '场景恢复未确认，下次牧场操作前会自动重新进入；连接保持在线' });
                 }
             }
         }
