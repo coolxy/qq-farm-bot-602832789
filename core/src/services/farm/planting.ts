@@ -1057,6 +1057,30 @@ async function autoPlantEmptyLands(deadLandIds: number[], emptyLandIds: number[]
 
     if (landsToPlant.length === 0) return { plantedLands: [] };
 
+    // 以薯换福：活动期间先用背包里的红薯占空地，剩下的再走普通策略。
+    // 补种失败（含回包状态不明）直接结束本轮，绝不回落到普通种植——否则会按策略买种子。
+    let eventPlanted: number[] = [];
+    try {
+        const { sweetPotatoPlantEmptyLands } = require('../activity-center');
+        eventPlanted = await sweetPotatoPlantEmptyLands(landsToPlant, {
+            canContinue: () => true,
+            knownLands: latestLands,
+        });
+        if (eventPlanted.length) {
+            landsToPlant = landsToPlant.filter((id: number) => !eventPlanted.includes(id));
+            log('以薯换福', `活动优先种红薯 ${eventPlanted.length} 块`, {
+                module: 'farm', event: 'sweet_potato_plant', result: 'ok', count: eventPlanted.length,
+            });
+        }
+    } catch (e: any) {
+        logWarn('以薯换福', `红薯补种暂停：${e.message}`, {
+            module: 'farm', event: 'sweet_potato_plant', result: 'error',
+        });
+        if (options.propagateErrors) throw e;
+        return { plantedLands: eventPlanted, deferredLandIds: landsToPlant };
+    }
+    if (landsToPlant.length === 0) return { plantedLands: eventPlanted };
+
     const accountStrategy = String(getPlantingStrategy() || '').trim();
 
     // 背包种子优先策略

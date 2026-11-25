@@ -1,12 +1,20 @@
 {
   "major": 3,
-  "minor": 36,
-  "patch": 10,
-  "build": 262,
-  "version": "3.36.10",
-  "updatedAt": "2026-11-25T05:22:56.342Z",
+  "minor": 37,
+  "patch": 0,
+  "build": 263,
+  "version": "3.37.0",
+  "updatedAt": "2026-11-25T10:04:23.043Z",
   "lastCommit": "—",
   "history": [
+    {
+      "version": "3.37.0",
+      "build": 263,
+      "date": "2026-11-25",
+      "summary": "新增以薯换福完整闭环：种植、出售、分享与兑换商店",
+      "commit": "—",
+      "type": "minor"
+    },
     {
       "version": "3.36.10",
       "build": 262,

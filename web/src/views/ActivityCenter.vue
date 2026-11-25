@@ -21,6 +21,7 @@ import PetDiaryPage from './activity-center/PetDiaryPage.vue'
 import QingMeiActivityPage from './activity-center/QingMeiActivityPage.vue'
 import QixiActivityPage from './activity-center/QixiActivityPage.vue'
 import StellarActivityPage from './activity-center/StellarActivityPage.vue'
+import SweetPotatoActivityPage from './activity-center/SweetPotatoActivityPage.vue'
 import WeatherActivityPage from './activity-center/WeatherActivityPage.vue'
 
 import SolarCalendarPage from './SolarCalendar.vue'
@@ -179,6 +180,10 @@ onUnmounted(() => {
   />
   <QingMeiActivityPage
     v-else-if="selectedActivity === 'qingmei'"
+    @back="goBack"
+  />
+  <SweetPotatoActivityPage
+    v-else-if="selectedActivity === 'sweetPotato'"
     @back="goBack"
   />
   <CharityActivityPage

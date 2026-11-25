@@ -246,6 +246,12 @@ function createDataProvider(options: DataProviderOptions) {
         startQingMeiBrew: (accountRef: string, ingredients: unknown) => callWorkerApi(resolveAccountRefId(accountRef), 'startQingMeiBrew', ingredients),
         continueQingMeiBrew: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'continueQingMeiBrew'),
         settleQingMeiBrew: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'settleQingMeiBrew'),
+        getSweetPotatoActivity: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getSweetPotatoActivity'),
+        getSweetPotatoShopCatalog: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getSweetPotatoShopCatalog'),
+        getSweetPotatoShops: (accountRef: string, input: unknown) => callWorkerApi(resolveAccountRefId(accountRef), 'getSweetPotatoShops', input),
+        operateSweetPotato: (accountRef: string, action: string, input: unknown) => (
+            callWorkerApi(resolveAccountRefId(accountRef), 'operateSweetPotato', action, input)
+        ),
         claimQixiBridgeRewards: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'claimQixiBridgeRewards'),
         giftQixiSachet: (accountRef: string, friendGid: unknown, messageTextId: unknown = 15) => (
             callWorkerApi(resolveAccountRefId(accountRef), 'giftQixiSachet', friendGid, messageTextId)

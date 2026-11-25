@@ -9,7 +9,7 @@ import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseSwitch from '@/components/ui/BaseSwitch.vue'
 import HourInput from '@/components/ui/HourInput.vue'
-import { MILK_TEA_ACTIVITY_WINDOW, MILK_TEA_AUTOMATION_OPTIONS, SHARE_REWARD_ACTIVITY_WINDOW } from '@/constants/activity-windows'
+import { MILK_TEA_ACTIVITY_WINDOW, MILK_TEA_AUTOMATION_OPTIONS, SHARE_REWARD_ACTIVITY_WINDOW, SWEET_POTATO_ACTIVITY_WINDOW, SWEET_POTATO_AUTOMATION_OPTIONS } from '@/constants/activity-windows'
 import { FERTILIZER_TIME_UNITS, fertilizerTimeSeconds, fertilizerTimeValue } from '@/utils/fertilizer-time'
 import {
   RANCH_AUTOMATION_LIMITS,
@@ -62,6 +62,8 @@ const shareRewardEnded = computed(() => Date.now() > SHARE_REWARD_ACTIVITY_WINDO
 const milkTeaEnded = computed(() => Date.now() > MILK_TEA_ACTIVITY_WINDOW.endMs)
 const showMilkTeaActivity = computed(() => !milkTeaEnded.value)
 const milkTeaSettings = computed(() => MILK_TEA_AUTOMATION_OPTIONS)
+const sweetPotatoEnded = computed(() => Date.now() > SWEET_POTATO_ACTIVITY_WINDOW.endMs)
+const sweetPotatoSettings = SWEET_POTATO_AUTOMATION_OPTIONS
 // 牧歌初启自动化开关（BUGDey 版五个 UI 开关；muge_personality_settle 由自动答题流程内部驱动，不单独展示）。
 const mugeSettings = [
   { key: 'muge_task_claim', label: '自动领取成长任务' },
@@ -168,12 +170,15 @@ const activityKeys = computed(() => [
   'share_reward_share',
   'share_reward_daily',
   'share_reward_milestones',
+  ...(!sweetPotatoEnded.value ? sweetPotatoSettings.map(setting => setting.key) : []),
 ])
 /** 已结束活动的开关不再出现在界面上，也不能算进「已开 N 项」。 */
 function activityKeyVisible(key: string) {
   if (shareRewardEnded.value && key.startsWith('share_reward_'))
     return false
   if (milkTeaEnded.value && milkTeaSettings.value.some(setting => setting.key === key))
+    return false
+  if (sweetPotatoEnded.value && sweetPotatoSettings.some(setting => setting.key === key))
     return false
   return true
 }
@@ -272,6 +277,7 @@ function summaryTags(key: ModuleKey) {
       (automation.value.automation.star_solar_claim || automation.value.automation.star_solar_quiz_claim) && '节令小札',
       mugeSettings.some(setting => automation.value.automation[setting.key]) && '牧歌初启',
       showMilkTeaActivity.value && milkTeaSettings.value.some(setting => milkTeaOptionEffective(setting) && automation.value.automation[setting.key]) && '奶茶热销中',
+      !sweetPotatoEnded.value && automation.value.automation.sweet_potato && '以薯换福',
       shareRewardActivityEnabled.value && '快乐不独享',
       activityEnabledCount.value === 0 && '未开启活动',
     ].filter(Boolean)
@@ -838,6 +844,26 @@ function cancel() {
               </section>
 
               <MilkTeaActivityPanel v-if="!milkTeaEnded" v-model:automation="automation" />
+
+              <section v-if="!sweetPotatoEnded" class="border border-orange-100 rounded-lg p-4 space-y-3 dark:border-orange-900/40">
+                <div>
+                  <div class="text-sm text-gray-700 font-medium dark:text-gray-300">
+                    以薯换福
+                  </div>
+                  <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    活动期间优先在空地种背包里的红薯，不铲正在生长的作物；关闭种植开关后，普通巡田也不会替你收红薯。自动出售只卖自己的铺子，开启分享时会先确认暴击涨价。兑换商店与收购记录尚未接入。
+                  </div>
+                </div>
+                <div class="grid gap-3 sm:grid-cols-2">
+                  <BaseSwitch
+                    v-for="item in sweetPotatoSettings"
+                    :key="item.key"
+                    v-model="automation.automation[item.key]"
+                    :label="item.label"
+                    :disabled="item.key !== 'sweet_potato' && automation.automation.sweet_potato === false"
+                  />
+                </div>
+              </section>
             </div>
           </div>
           <footer class="flex justify-end gap-2 border-t bg-gray-50/70 px-5 py-4 dark:border-gray-700 dark:bg-gray-900/20 sm:px-6">

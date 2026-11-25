@@ -84,6 +84,12 @@ export interface AutomationConfig {
   // 青莓酒馆
   qingmei_seed_claim?: boolean
   qingmei_wine_brew?: boolean
+  // 以薯换福
+  sweet_potato?: boolean
+  sweet_potato_claim?: boolean
+  sweet_potato_plant?: boolean
+  sweet_potato_sell?: boolean
+  sweet_potato_share?: boolean
   // 七夕
   qixi_dew_use?: boolean
   qixi_bridge_build?: boolean

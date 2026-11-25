@@ -21,7 +21,7 @@ const emit = defineEmits<{
 const accountStore = useAccountStore()
 const activityStore = useActivityCenterStore()
 const { currentAccountId } = storeToRefs(accountStore)
-const { activities: farmActivities, season, shop, solarTerms, constellation, qixi, qingMei, charity, weather, loading: farmLoading, error: farmError, loadedAccountId: farmLoadedAccountId, serverClockOffset: farmClockOffset } = storeToRefs(activityStore)
+const { activities: farmActivities, season, shop, solarTerms, constellation, qixi, qingMei, charity, weather, sweetPotato, loading: farmLoading, error: farmError, loadedAccountId: farmLoadedAccountId, serverClockOffset: farmClockOffset } = storeToRefs(activityStore)
 const { serverNow: farmNow } = useActivityClock()
 const ranchDirectory = ref<ActivityDirectoryItemDto[]>([])
 const ranchLoading = ref(false)
@@ -76,6 +76,18 @@ const displayActivities = computed<ActivityDirectoryItemDto[]>(() => {
       gameplayKey: 'qixi',
       gameplayTargets: ['qixi'],
       detailTarget: 'qixi',
+    })
+  }
+  if (sweetPotato.value) {
+    appendDetailEntry({
+      id: sweetPotato.value.activityId,
+      activityIds: [sweetPotato.value.groupId, sweetPotato.value.activityId].filter(Boolean),
+      name: sweetPotato.value.title,
+      startTime: sweetPotato.value.startTime,
+      endTime: sweetPotato.value.endTime,
+      gameplayKey: 'sweetPotato',
+      gameplayTargets: ['sweetPotato'],
+      detailTarget: 'sweetPotato',
     })
   }
   if (qingMei.value) {

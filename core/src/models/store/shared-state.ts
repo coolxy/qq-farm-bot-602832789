@@ -9,6 +9,7 @@ const { createConfigStorage } = require('./config-storage');
 const { storageError } = require('../../services/json-db');
 const { parseHourOfDay } = require('../../utils/hour-of-day');
 const { RANCH_AUTOMATION_DEFAULTS, normalizeRanchSetting, migrateRanchMarketAutomation } = require('../../config/ranch-automation');
+const { SWEET_POTATO_DEFAULTS } = require('../../config/sweet-potato');
 
 const STORE_FILE: string = getDataFile('store.json');
 const ACCOUNTS_FILE: string = getDataFile('accounts.json');
@@ -74,6 +75,7 @@ function normalizeCapitalMode(value: unknown, fallback: CapitalModeConfig = DEFA
 const DEFAULT_ACCOUNT_CONFIG: AccountConfig = {
     automation: {
         ...RANCH_AUTOMATION_DEFAULTS,
+        ...SWEET_POTATO_DEFAULTS,
         farm: true,
         farm_harvest_tiangong: true,
         farm_push: true,

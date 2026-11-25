@@ -25,6 +25,7 @@ const {
 const { autoPlantEmptyLands, getRemainingPlantDelayMs, runFertilizerByConfig } = require('./planting');
 const { checkAndBuyFertilizerBoth } = require('../mall');
 const ownMaturity = require('./own-maturity');
+const { sweetPotatoEnabled } = require('../../config/sweet-potato');
 // 延迟加载以打破循环依赖: visit-strategy → farm/index → scheduler → visit-strategy
 function inFarmQuietHours() {
     return require('../friend/visit-strategy').inFarmQuietHours();
@@ -138,11 +139,24 @@ async function runMultiSeasonFertilizer(growingLandIds: any[], propagateErrors: 
 }
 
 function autoHarvestLandIds(status: any): number[] {
-    if (getAutomation().farm_harvest_tiangong !== false) return status.harvestable;
-    const tiangongLandIds = new Set(status.harvestableInfo
-        .filter((info: any) => Number(getItemById(getPlantById(info.plantId)?.seed_id)?.rarity) === 4)
-        .map((info: any) => info.landId));
-    return status.harvestable.filter((id: number) => !tiangongLandIds.has(id));
+    const automation = getAutomation();
+    const excluded = new Set<number>();
+    // 以薯换福：种植子开关关掉时，普通巡田也不许收红薯（否则等于绕过开关）。
+    if (!sweetPotatoEnabled(automation, 'plant')) {
+        const { SWEET_POTATO } = require('../../config/sweet-potato');
+        for (const info of status.harvestableInfo || []) {
+            if (Number(info.plantId) === SWEET_POTATO.plantId) excluded.add(Number(info.landId));
+        }
+    }
+    if (automation.farm_harvest_tiangong === false) {
+        for (const info of status.harvestableInfo || []) {
+            if (Number(getItemById(getPlantById(info.plantId)?.seed_id)?.rarity) === 4) {
+                excluded.add(Number(info.landId));
+            }
+        }
+    }
+    if (!excluded.size) return status.harvestable;
+    return status.harvestable.filter((id: number) => !excluded.has(id));
 }
 
 /**

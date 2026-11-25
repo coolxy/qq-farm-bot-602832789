@@ -15,6 +15,7 @@
 
 | 版本 | 更新序号 | 日期 | 更新内容 | 提交 |
 | --- | --- | --- | --- | --- |
+| v3.37.0 | #263 | 2026-11-25 | 新增以薯换福完整闭环：种植、出售、分享与兑换商店 | — |
 | v3.36.10 | #262 | 2026-11-25 | 手机端设置页入口改成等宽三列网格 | — |
 | v3.36.9 | #261 | 2026-11-25 | 修掉更新助手心跳的时间单位错位 | — |
 | v3.36.8 | #260 | 2026-11-25 | 补齐上游容器更新能力对照，修正摘要提取 | — |
@@ -251,6 +252,19 @@ flowchart TB
 ```
 
 ## 详细记录
+
+### 2026-11-25 · v3.37.0（#263） · 新增以薯换福完整闭环：种植、出售、分享与兑换商店
+
+上游 PR「补全红薯资源」只带来 `Plant.json` / `ItemInfo.json` / `Illustrated.json` 与 9 张 png（14 个文件 +335 行），资源层齐了、玩法层一行没有：`GAMEPLAY_ADAPTERS` 里没有活动 ID，活动中心不渲染入口，也没有任何服务能领种子、卖蜜薯。这次把玩法补完，并按此前给出的方案 B 额外接入兑换商店。
+
+- **协议**：新增 `core/src/proto/sweet-potato.proto`，与上游发布镜像 `Anrylin/qq-farm-bot` 里的同名文件逐字段核对一致（该仓库只发布产物，从镜像层里解出来比对）。活动组 `2026111707`、主活动 `2026111708`、兑换商店 `2026111709`；`Operate` 的 cmd 91 领种子、92 查铺、93 出售、98 分享，selector 是 oneof，只带 cmd 不带 selector 时服务端回包正常但状态不变。
+- **兑换商店复用通用协议**，没有新增 proto：目录走 `QueryActivityRequest{operate_type: 7}` 读 `catalog.goods`，兑换走 `ExchangeShopRequest{operate_type: 1, exchange_shop_operate}`，与 `stellar.ts` 里的既有范式一致；回包必须回带同一个 `operate_type` 才算成功。
+- **写操作统一风控**（`core/src/services/activity-center/sweet-potato.ts`）：先读状态 → 逐项校验 → 单次发送 → 回包逐字段核对（出售比对数量、单价、收入三个字段）→ 状态确认不了就抛 `SWEET_POTATO_RESULT_UNKNOWN` 并冷却 300 秒，**不自动重试**。出售额外带 `requestId` 幂等签名，同内容复用 Promise、内容变化直接拒绝，签名表 128 条上限、10 分钟过期。价格和余量在发送前再读一次铺子，价变了抛 `SWEET_POTATO_PRICE_CHANGED`，本次不卖。
+- **分享暴击两段式**：`CheckCanShare` → `Operate(cmd=98)` 确认 `share_claimed` → `ReportShare{field_1:28, field_4:2017}` → 重读 `GetGroup` 确认 `bonus_price > 0`。任何一步不确认都按结果不明处理，不写「今日已分享」，当天还能再试。
+- **巡田接线**：`autoPlantEmptyLands` 确定待种地块后先试红薯补种，成功即返回、不回落普通策略；`autoHarvestLandIds` 在 `sweet_potato_plant` 关闭时把红薯地块从自动收获里排除，关掉种植就不会被顺手收走。活动自动化的 `plant` op 在 `automation.farm` 开启时返回 false，把地交给巡田，避免两处抢同一块空地。`isSweetPotatoActive` 带 60 秒缓存，活动未下发时 `getGroup` 写 300 秒负缓存，结束后不空打请求。
+- **面板与前端**：新增 `/api/activity-center/sweet-potato`（状态 / `shop-catalog` / `shops?offset=` / `POST :action` 四个动作），四个方法同步注册进 provider、worker 与超时表；活动页 `SweetPotatoTab.vue` 有四宫格指标、领种子 / 分享 / 一键卖自己三个主操作、好友铺子比价分页、选铺出售面板（二次确认 + 预计收入）与兑换商店目录，`≤767px` 两列；设置页新增 5 个开关（总开关关闭时子开关 disabled，活动结束后整块隐藏）。
+- **验证**：新增 `core/tests/sweet-potato.test.js` 8 条（含 proto 往返、已领种子不发请求、价格变化中止、余量不足中止、分享未涨价判结果不明、好友价格缓存、开关约束、活动 ID 已绑定玩法）与 `web/tests/sweet-potato-activity.test.mjs` 5 条（玩法注册、目录入口、页面挂载、设置页开关、前后端 ID 与时间窗一致）。core 1073 条、web 366 条全绿，`vue-tsc` / `eslint --max-warnings=0` / `pnpm build` 通过。
+- **未实服验证**：兑换商店的真实兑换与好友铺子真实成交只用假网关回包验证了风控分支，首次使用请在界面里手动点一次核对余额。细节见 `docs/sweet-potato.md`。
 
 ### 2026-11-25 · v3.36.10（#262） · 手机端设置页入口改成等宽三列网格
 

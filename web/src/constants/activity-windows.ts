@@ -39,6 +39,21 @@ export function isWithinActivityWindowMs(window: { startMs: number, endMs: numbe
 export const MILK_TEA_ACTIVITY_WINDOW = { startMs: 1792029600000, endMs: 1794844799000, updatedMs: 1792029600000 }
 export const MILK_TEA_BUSINESS_WINDOW = { ...MILK_TEA_ACTIVITY_WINDOW, endMs: 1794671998000 }
 
+/** 以薯换福（2026-11）：时间窗取自抓包，服务端 GetGroup 回包会以实际 head 覆盖。 */
+export const SWEET_POTATO_ACTIVITY_WINDOW = {
+  startMs: 1795572000 * 1000,
+  endMs: 1796831999 * 1000,
+  updatedMs: 1795572000 * 1000,
+}
+
+export const SWEET_POTATO_AUTOMATION_OPTIONS = [
+  { key: 'sweet_potato', label: '以薯换福总开关' },
+  { key: 'sweet_potato_claim', label: '每日领取红薯种子' },
+  { key: 'sweet_potato_plant', label: '自动种植与收获红薯' },
+  { key: 'sweet_potato_sell', label: '自动出售蜜薯' },
+  { key: 'sweet_potato_share', label: '自动分享暴击' },
+] as const
+
 export interface MilkTeaAutomationOption {
   key: string
   label: string

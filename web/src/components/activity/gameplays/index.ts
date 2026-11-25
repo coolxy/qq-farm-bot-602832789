@@ -5,6 +5,7 @@ import { petGameplay } from './pet'
 import { qingMeiGameplay } from './qingmei'
 import { qixiGameplay } from './qixi'
 import { stellarGameplay } from './stellar'
+import { sweetPotatoGameplay } from './sweetPotato'
 import { weatherGameplay } from './weather'
 
 const gameplayModules: Record<ActivityGameplayKey, ActivityGameplayModule> = {
@@ -18,6 +19,7 @@ const gameplayModules: Record<ActivityGameplayKey, ActivityGameplayModule> = {
   qingmei: qingMeiGameplay,
   charity: charityGameplay,
   weather: weatherGameplay,
+  sweetPotato: sweetPotatoGameplay,
 }
 
 function inferGameplayKey(activity: ActivityDirectoryItemDto): ActivityGameplayKey | null {
@@ -35,6 +37,8 @@ function inferGameplayKey(activity: ActivityDirectoryItemDto): ActivityGameplayK
     return 'qixi'
   if (activity.detailTarget === 'qingmei')
     return 'qingmei'
+  if (activity.detailTarget === 'sweetPotato')
+    return 'sweetPotato'
   if (activity.detailTarget)
     return 'stellar'
 
@@ -47,6 +51,8 @@ function inferGameplayKey(activity: ActivityDirectoryItemDto): ActivityGameplayK
     return 'qixi'
   if (['2026081200', '2026081201', '2026081202'].some(id => activityIds.has(id)))
     return 'qingmei'
+  if (['2026111707', '2026111708', '2026111709'].some(id => activityIds.has(id)))
+    return 'sweetPotato'
   if (['2026090900', '2026090901'].some(id => activityIds.has(id)))
     return 'charity'
 
@@ -59,6 +65,8 @@ function inferGameplayKey(activity: ActivityDirectoryItemDto): ActivityGameplayK
     return 'qingmei'
   if (name.includes('公益小红花'))
     return 'charity'
+  if (name.includes('以薯换福') || name.includes('红薯'))
+    return 'sweetPotato'
   if (/千星|星砂|星宿|节令/.test(name))
     return 'stellar'
   return null

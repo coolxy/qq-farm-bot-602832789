@@ -2,8 +2,8 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import api from '@/api'
 
-export type ActivityTabKey = 'travel' | 'constellation' | 'shop' | 'solar' | 'qixi' | 'qingmei' | 'charity' | 'weather' | 'pet' | 'wish' | 'happy' | 'milk' | 'muge'
-export type ActivityGameplayKey = 'stellar' | 'qixi' | 'qingmei' | 'charity' | 'weather' | 'pet' | 'wish' | 'happy' | 'milk' | 'muge'
+export type ActivityTabKey = 'travel' | 'constellation' | 'shop' | 'solar' | 'qixi' | 'qingmei' | 'charity' | 'weather' | 'pet' | 'wish' | 'happy' | 'milk' | 'muge' | 'sweetPotato'
+export type ActivityGameplayKey = 'stellar' | 'qixi' | 'qingmei' | 'charity' | 'weather' | 'pet' | 'wish' | 'happy' | 'milk' | 'muge' | 'sweetPotato'
 export type ActivityVariant = 'blue' | 'violet' | 'gold' | 'green'
 export type ActivityRecord = Record<string, unknown>
 
@@ -492,6 +492,15 @@ export interface CharityRedFlowerActivityDto {
   }
 }
 
+export interface SweetPotatoSummaryDto {
+  activityId: string
+  groupId: string
+  title: string
+  active: boolean
+  startTime: number | null
+  endTime: number | null
+}
+
 export interface ActivityCenterSnapshotDto {
   serverTime: number | null
   activities: ActivityDirectoryItemDto[]
@@ -503,6 +512,7 @@ export interface ActivityCenterSnapshotDto {
   qingMei: QingMeiActivityDto | null
   charity: CharityRedFlowerActivityDto | null
   weather: WeatherActivityDto | null
+  sweetPotato: SweetPotatoSummaryDto | null
   actions: ActivityActionsDto
 }
 
@@ -895,13 +905,13 @@ function normalizeSolarTerms(value: unknown): SolarTermsDto | null {
 export function normalizeActivityDirectory(value: unknown): ActivityDirectoryItemDto[] {
   return records(value).map((entry) => {
     const detailTarget = text(entry.detailTarget, entry.detail_target)
-    const normalizedDetailTarget = ['travel', 'constellation', 'shop', 'solar', 'qixi', 'qingmei', 'charity', 'weather', 'pet', 'wish', 'happy', 'milk', 'muge'].includes(detailTarget)
+    const normalizedDetailTarget = ['travel', 'constellation', 'shop', 'solar', 'qixi', 'qingmei', 'charity', 'weather', 'pet', 'wish', 'happy', 'milk', 'muge', 'sweetPotato'].includes(detailTarget)
       ? detailTarget as ActivityTabKey
       : null
     const gameplayKey = text(entry.gameplayKey, entry.gameplay_key)
     const rawGameplayTargets = first(entry.gameplayTargets, entry.gameplay_targets)
     const gameplayTargets = Array.isArray(rawGameplayTargets)
-      ? rawGameplayTargets.map(value => text(value)).filter((value): value is ActivityTabKey => ['travel', 'constellation', 'shop', 'solar', 'qixi', 'qingmei', 'charity', 'weather', 'pet', 'wish', 'happy', 'milk', 'muge'].includes(value))
+      ? rawGameplayTargets.map(value => text(value)).filter((value): value is ActivityTabKey => ['travel', 'constellation', 'shop', 'solar', 'qixi', 'qingmei', 'charity', 'weather', 'pet', 'wish', 'happy', 'milk', 'muge', 'sweetPotato'].includes(value))
       : []
     const id = text(entry.id, entry.activityId, entry.activity_id)
     const rawActivityIds = first(entry.activityIds, entry.activity_ids)
@@ -933,9 +943,11 @@ export function normalizeActivityDirectory(value: unknown): ActivityDirectoryIte
                       ? 'qingmei' as const
                       : gameplayKey === 'qixi' || normalizedDetailTarget === 'qixi'
                         ? 'qixi' as const
-                        : gameplayKey === 'stellar' || normalizedDetailTarget
-                          ? 'stellar' as const
-                          : null,
+                        : gameplayKey === 'sweetPotato' || normalizedDetailTarget === 'sweetPotato'
+                          ? 'sweetPotato' as const
+                          : gameplayKey === 'stellar' || normalizedDetailTarget
+                            ? 'stellar' as const
+                            : null,
       gameplayTargets: gameplayTargets.length > 0 ? gameplayTargets : normalizedDetailTarget ? [normalizedDetailTarget] : [],
       detailTarget: normalizedDetailTarget,
     }
@@ -1535,6 +1547,21 @@ function normalizeAction(actions: ActivityRecord, capabilities: ActivityRecord, 
   }
 }
 
+function normalizeSweetPotatoSummary(value: unknown): SweetPotatoSummaryDto | null {
+  const raw = record(value)
+  const activityId = text(raw.activityId, raw.activity_id)
+  if (!activityId || (raw.active === undefined && !raw.title))
+    return null
+  return {
+    activityId,
+    groupId: text(raw.groupId, raw.group_id),
+    title: text(raw.title) || '以薯换福',
+    active: raw.active === true,
+    startTime: toMilliseconds(first(raw.startTime, raw.start_time)),
+    endTime: toMilliseconds(first(raw.endTime, raw.end_time)),
+  }
+}
+
 export function normalizeActivitySnapshot(value: unknown): ActivityCenterSnapshotDto {
   const envelope = record(value)
   const root = record(first(envelope.snapshot, envelope.data, value))
@@ -1553,6 +1580,7 @@ export function normalizeActivitySnapshot(value: unknown): ActivityCenterSnapsho
     qingMei: normalizeQingMei(first(root.qingMei, root.qingmei, root.qing_mei)),
     charity: normalizeCharityRedFlower(first(root.charity, root.charityRedFlower, root.charity_red_flower)),
     weather: normalizeWeather(first(root.weather, root.weatherActivity, root.weather_activity)),
+    sweetPotato: normalizeSweetPotatoSummary(first(root.sweetPotato, root.sweet_potato)),
     actions: {
       claimPass: normalizeAction(actionsRaw, capabilitiesRaw, ['claimPass', 'passClaim', 'pass_claim']),
       lightConstellation: normalizeAction(actionsRaw, capabilitiesRaw, ['lightConstellation', 'constellationLight', 'constellation_light']),
@@ -1725,6 +1753,7 @@ export const useActivityCenterStore = defineStore('activity-center', () => {
   const solar = solarTerms
   const constellation = computed(() => snapshot.value.constellation)
   const qixi = computed(() => snapshot.value.qixi)
+  const sweetPotato = computed(() => snapshot.value.sweetPotato)
   const qingMei = computed(() => snapshot.value.qingMei)
   const charity = computed(() => snapshot.value.charity)
   const weather = computed<WeatherActivityDto | null>(() => {
@@ -2171,6 +2200,7 @@ export const useActivityCenterStore = defineStore('activity-center', () => {
     qingMei,
     charity,
     weather,
+    sweetPotato,
     weatherFriends,
     weatherFriendsLoading,
     weatherFriendInspectingGid,

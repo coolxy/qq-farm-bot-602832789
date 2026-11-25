@@ -42,6 +42,7 @@ async function loadProto(): Promise<void> {
         getResourcePath('proto', 'collectionpb.proto'),
         getResourcePath('proto', 'interactpb.proto'),
         getResourcePath('proto', 'activitypb.proto'),
+        getResourcePath('proto', 'sweet-potato.proto'),
         getResourcePath('proto', 'muge.proto'),
         getResourcePath('proto', 'seasonpb.proto'),
         getResourcePath('proto', 'solartermspb.proto'),
@@ -69,6 +70,9 @@ async function loadProto(): Promise<void> {
 
     types.AutumnOperateRequest = root.lookupType('gamepb.activitypb.AutumnOperateRequest');
     for (const name of ['MugeListReply', 'MugeOperateRequest', 'MugeOperateReply']) {
+        types[name] = root.lookupType(`gamepb.activitypb.${name}`);
+    }
+    for (const name of ['SweetPotatoGroupReply', 'SweetPotatoOperateRequest', 'SweetPotatoOperateReply']) {
         types[name] = root.lookupType(`gamepb.activitypb.${name}`);
     }
 

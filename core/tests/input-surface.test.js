@@ -160,6 +160,9 @@ const INPUT_SURFACE = [
     ['activity-center/pet-diary-routes.ts', 'gid', 'query', 'int', 'service', ['src/services/activity-center/pet-diary.ts', 'positiveDecimal(']],
     ['activity-center/pet-diary-routes.ts', 'kind', 'query', 'text', 'route'],
     ['activity-center/pet-diary-routes.ts', 'params', 'body', 'object', 'route'],
+    // 以薯换福：action 只允许 claim / share / sell / exchange（服务层白名单），offset 由服务层做纯数字校验。
+    ['activity-center/sweet-potato-routes.ts', 'action', 'params', 'text', 'service', ['src/services/activity-center/sweet-potato.ts', 'INVALID_SWEET_POTATO_ACTION']],
+    ['activity-center/sweet-potato-routes.ts', 'offset', 'query', 'int', 'service', ['src/services/activity-center/sweet-potato.ts', 'INVALID_SWEET_POTATO_PAGE']],
     ['activity-center/qingmei-routes.ts', 'count', 'body', 'int', 'service', ['src/services/activity-center/qingmei.ts', 'positiveDecimal(input, \'INVALID_QINGMEI_COUNT\'']],
     ['activity-center/qingmei-routes.ts', 'ingredients', 'body', 'int-list', 'service', ['src/services/activity-center/qingmei.ts', 'positiveDecimal(entry?.uid']],
     ['activity-center/qixi-routes.ts', 'friendGid', 'body', 'int', 'service', ['src/services/activity-center/qixi.ts', 'positiveDecimal(friendGidInput']],
