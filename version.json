@@ -1,12 +1,20 @@
 {
   "major": 3,
   "minor": 39,
-  "patch": 16,
-  "build": 282,
-  "version": "3.39.16",
-  "updatedAt": "2026-11-25T23:09:11.448Z",
+  "patch": 17,
+  "build": 283,
+  "version": "3.39.17",
+  "updatedAt": "2026-11-25T23:24:13.049Z",
   "lastCommit": "—",
   "history": [
+    {
+      "version": "3.39.17",
+      "build": 283,
+      "date": "2026-11-26",
+      "summary": "牧场今日统计去除「任务」项",
+      "commit": "—",
+      "type": "patch"
+    },
     {
       "version": "3.39.16",
       "build": 282,

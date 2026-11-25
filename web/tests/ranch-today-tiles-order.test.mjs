@@ -18,7 +18,7 @@ function tileOrder() {
   return [...block[1].matchAll(/'([^']+)'/g)].map(match => match[1])
 }
 
-test('今日统计固定 15 项：金券 → 经验 → 松果 → 便便 → 出售 → 偷取 → 蚊子 → 喂养 → 催产 → 收产物 → 出栏 → 清理 → 帮清理 → 帮催产 → 任务', () => {
+test('今日统计固定 14 项：金券 → 经验 → 松果 → 便便 → 出售 → 偷取 → 蚊子 → 喂养 → 催产 → 收产物 → 出栏 → 清理 → 帮清理 → 帮催产', () => {
   assert.deepEqual(tileOrder(), [
     'currency-1007',
     'today-exp',
@@ -34,7 +34,6 @@ test('今日统计固定 15 项：金券 → 经验 → 松果 → 便便 → �
     'action-clean',
     'action-cleanFriend',
     'action-produceFriend',
-    'action-claimTasks',
   ])
 })
 
@@ -60,7 +59,7 @@ test('顺序表里的 key 都能被固定瓦片生成出来', () => {
 
   for (const key of tileOrder()) assert.ok(known.has(key), `${key} 要能对应到实际瓦片`)
   assert.ok(currencyIds.length >= 3, '金券/松果/便便三个货币瓦片都要还在')
-  assert.ok(actionKeys.length >= 11, '11 项动作瓦片都要在固定表里')
+  assert.ok(actionKeys.length >= 10, '10 项动作瓦片都要在固定表里')
 })
 
 test('动作 key 与后端 recordAction 的命名一致', () => {
@@ -68,6 +67,11 @@ test('动作 key 与后端 recordAction 的命名一致', () => {
   const statsSource = readFileSync(new URL('../../core/src/services/ranch/stats.ts', import.meta.url), 'utf8')
   assert.match(actionsSource, /recordAction\(action\)/, '统一入口要按动作名记账')
   assert.match(statsSource, /function recordAction\(action: string\)/, '统计模块要按动作名累加')
-  for (const key of ['feed', 'produce', 'harvest', 'release', 'cleanFriend', 'produceFriend', 'claimTasks'])
+  for (const key of ['feed', 'produce', 'harvest', 'release', 'cleanFriend', 'produceFriend'])
     assert.match(source, new RegExp(`key: '${key}', label:`), `缺少动作 ${key}`)
+})
+
+test('今日统计不再展示「任务」瓦片', () => {
+  assert.ok(!tileOrder().includes('action-claimTasks'), '顺序表里不应再有任务')
+  assert.doesNotMatch(source, /key: 'claimTasks', label:/, '固定动作表里不应再有任务')
 })
