@@ -4,6 +4,7 @@ import { computed, ref } from 'vue'
 import MilkTeaActivityPanel from '@/components/settings/MilkTeaActivityPanel.vue'
 import StrategySettingsPanel from '@/components/settings/StrategySettingsPanel.vue'
 import StrategyTimingPanel from '@/components/settings/StrategyTimingPanel.vue'
+import YishuHuanfuActivityPanel from '@/components/settings/YishuHuanfuActivityPanel.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
@@ -168,6 +169,8 @@ const activityKeys = computed(() => [
   'share_reward_share',
   'share_reward_daily',
   'share_reward_milestones',
+  // 以薯换福整块现在归在活动卡片里，总开关也算一项「已配置」。
+  'yishu_enabled',
 ])
 /** 已结束活动的开关不再出现在界面上，也不能算进「已开 N 项」。 */
 function activityKeyVisible(key: string) {
@@ -273,6 +276,7 @@ function summaryTags(key: ModuleKey) {
       mugeSettings.some(setting => automation.value.automation[setting.key]) && '牧歌初启',
       showMilkTeaActivity.value && milkTeaSettings.value.some(setting => milkTeaOptionEffective(setting) && automation.value.automation[setting.key]) && '奶茶热销中',
       shareRewardActivityEnabled.value && '快乐不独享',
+      automation.value.automation.yishu_enabled !== false && '以薯换福',
       activityEnabledCount.value === 0 && '未开启活动',
     ].filter(Boolean)
   }
@@ -839,6 +843,7 @@ function cancel() {
 
               <MilkTeaActivityPanel v-if="!milkTeaEnded" v-model:automation="automation" />
 
+              <YishuHuanfuActivityPanel v-model:automation="automation" />
             </div>
           </div>
           <footer class="flex justify-end gap-2 border-t bg-gray-50/70 px-5 py-4 dark:border-gray-700 dark:bg-gray-900/20 sm:px-6">
