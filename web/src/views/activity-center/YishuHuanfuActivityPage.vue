@@ -220,9 +220,23 @@ async function onClaimCommission() {
 .yshf-view {
   display: flex;
   min-width: 0;
+  flex: 1;
+  min-height: 0;
+  /* 活动详情态下外层 `.farm-page-content.is-activity-detail` 是 overflow:hidden，
+     纵向滚动必须由这一层自己承担，否则超出的部分直接被裁掉（表现为滑不动）。 */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
   flex-direction: column;
   gap: 12px;
   padding-bottom: 24px;
+}
+
+/* 本层同时是滚动容器和 flex column：子项默认 flex-shrink:1 会被压扁去「适应」容器，
+   结果是内容互相挤压而不是撑出滚动高度。这里钉住不收缩。 */
+.yshf-view > * {
+  flex: none;
 }
 
 .yshf-view__head {
