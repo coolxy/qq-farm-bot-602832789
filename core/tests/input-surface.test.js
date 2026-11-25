@@ -160,12 +160,16 @@ const INPUT_SURFACE = [
     ['activity-center/pet-diary-routes.ts', 'gid', 'query', 'int', 'service', ['src/services/activity-center/pet-diary.ts', 'positiveDecimal(']],
     ['activity-center/pet-diary-routes.ts', 'kind', 'query', 'text', 'route'],
     ['activity-center/pet-diary-routes.ts', 'params', 'body', 'object', 'route'],
-    // 以薯换福：action 只允许 claim / share / sell / exchange（服务层白名单），offset 由服务层做纯数字校验。
-    ['activity-center/sweet-potato-routes.ts', 'action', 'params', 'text', 'service', ['src/services/activity-center/sweet-potato.ts', 'INVALID_SWEET_POTATO_ACTION']],
-    ['activity-center/sweet-potato-routes.ts', 'offset', 'query', 'int', 'service', ['src/services/activity-center/sweet-potato.ts', 'INVALID_SWEET_POTATO_PAGE']],
-    ['activity-center/sweet-potato-routes.ts', 'limit', 'query', 'int', 'service', ['src/services/activity-center/sweet-potato.ts', 'SCAN_MAX_LIMIT']],
+    // 以薯换福：路由只转发，数值全部由 services/activity-center/yishuhuanfu.ts 的
+    // positiveDecimal 收敛（friendGid / count / index），limit 由 FRIEND_SCAN_MAX_LIMIT 夹取。
+    ['activity-center/yishuhuanfu-routes.ts', 'friendGid', 'query', 'int', 'service', ['src/services/activity-center/yishuhuanfu.ts', 'INVALID_YSHF_SHOP_GID']],
+    ['activity-center/yishuhuanfu-routes.ts', 'friendGid', 'body', 'int', 'service', ['src/services/activity-center/yishuhuanfu.ts', 'INVALID_YSHF_FRIEND_GID']],
+    // /sell 与 /exchange 都用 body.count：两个入口共用同一份正数校验。
+    ['activity-center/yishuhuanfu-routes.ts', 'count', 'body', 'int', 'service', ['src/services/activity-center/yishuhuanfu.ts', 'INVALID_YSHF_SELL_COUNT']],
+    ['activity-center/yishuhuanfu-routes.ts', 'index', 'body', 'int', 'service', ['src/services/activity-center/yishuhuanfu.ts', 'INVALID_YSHF_CATALOG_INDEX']],
+    ['activity-center/yishuhuanfu-routes.ts', 'limit', 'query', 'int', 'service', ['src/services/activity-center/yishuhuanfu.ts', 'FRIEND_SCAN_MAX_LIMIT']],
     // force 只认 true / '1'，其余一律当 false，服务层用 FRIEND_SCAN_TTL_MS 决定要不要走缓存。
-    ['activity-center/sweet-potato-routes.ts', 'force', 'query', 'text', 'service', ['src/services/activity-center/sweet-potato.ts', 'FRIEND_SCAN_TTL_MS']],
+    ['activity-center/yishuhuanfu-routes.ts', 'force', 'query', 'text', 'service', ['src/services/activity-center/yishuhuanfu.ts', 'FRIEND_SCAN_TTL_MS']],
     ['activity-center/qingmei-routes.ts', 'count', 'body', 'int', 'service', ['src/services/activity-center/qingmei.ts', 'positiveDecimal(input, \'INVALID_QINGMEI_COUNT\'']],
     ['activity-center/qingmei-routes.ts', 'ingredients', 'body', 'int-list', 'service', ['src/services/activity-center/qingmei.ts', 'positiveDecimal(entry?.uid']],
     ['activity-center/qixi-routes.ts', 'friendGid', 'body', 'int', 'service', ['src/services/activity-center/qixi.ts', 'positiveDecimal(friendGidInput']],

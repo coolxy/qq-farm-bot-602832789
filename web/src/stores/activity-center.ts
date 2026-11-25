@@ -2,8 +2,8 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import api from '@/api'
 
-export type ActivityTabKey = 'travel' | 'constellation' | 'shop' | 'solar' | 'qixi' | 'qingmei' | 'charity' | 'weather' | 'pet' | 'wish' | 'happy' | 'milk' | 'muge' | 'sweetPotato'
-export type ActivityGameplayKey = 'stellar' | 'qixi' | 'qingmei' | 'charity' | 'weather' | 'pet' | 'wish' | 'happy' | 'milk' | 'muge' | 'sweetPotato'
+export type ActivityTabKey = 'travel' | 'constellation' | 'shop' | 'solar' | 'qixi' | 'qingmei' | 'charity' | 'weather' | 'pet' | 'wish' | 'happy' | 'milk' | 'muge' | 'yishuhuanfu'
+export type ActivityGameplayKey = 'stellar' | 'qixi' | 'qingmei' | 'charity' | 'weather' | 'pet' | 'wish' | 'happy' | 'milk' | 'muge' | 'yishuhuanfu'
 export type ActivityVariant = 'blue' | 'violet' | 'gold' | 'green'
 export type ActivityRecord = Record<string, unknown>
 
@@ -412,6 +412,115 @@ export interface QingMeiIngredientDto extends ActivityItemDto {
   mutantTypeNames: string[]
 }
 
+export interface YishuHuanfuCatalogEntryDto {
+  index: number
+  itemId: string | null
+  name: string
+  nameKnown: boolean
+  price: string
+  status: number
+  limit: string
+  // 兑换后服务端补的今日已兑次数（field 5），仅作展示参考。
+  exchangedToday: string
+  image: string
+  exchangeable: boolean
+}
+
+export interface YishuHuanfuFriendShopDto {
+  gid: string
+  name: string
+  avatar: string
+  level: string
+  own: boolean
+  // price 是基础价，bonus 是加成，游戏界面显示的“今日蜜薯收购价”是两者之和 totalPrice。
+  price: string
+  bonus: string
+  totalPrice: string
+  quota: string
+  quotaCap: string
+  quotaUsed: string
+  // cmd 92 的 can_sell：true 收薯 / false 明确不收 / null 回包没带该字段（按可卖处理）。
+  canSell: boolean | null
+  // 自家铺子不占好友额度，界面显示「不限」而不是「还可收 N 个」。
+  unlimited: boolean
+}
+
+/**
+ * 一条收购记录（cmd 95）。好友把蜜薯卖进你的铺子后产生：
+ * total 是付给卖家的福气币总额，commission 是你拿到的提成。
+ */
+export interface YishuHuanfuRecordDto {
+  timestamp: string
+  gid: string
+  count: string
+  total: string
+  name: string
+  avatar: string
+  level: string
+  commission: string
+}
+
+export interface YishuHuanfuFriendScanDto {
+  shops: YishuHuanfuFriendShopDto[]
+  best: YishuHuanfuFriendShopDto | null
+  ownShop: YishuHuanfuFriendShopDto | null
+  scanned: number
+  failed: number
+  friendCount: number
+  friendListError: string
+  scannedAt: number
+  cached: boolean
+}
+
+export interface YishuHuanfuActivityDto {
+  groupId: string
+  activityId: string
+  name: string
+  startTime: number | null
+  endTime: number | null
+  rules: ActivityRulesDto
+  active: boolean
+  serverTime: string
+  shop: {
+    gid: string
+    price: string
+    priceKnown: boolean
+    quoteTime: string
+    selfPrice: string
+    // 分享暴击加成，展示用：预计成交价 = price + bonus，实际以出售回包为准。
+    bonus: string
+    estimatedPrice: string | null
+    // 剩余接收额度只能靠 cmd 92 现查，快照里为 null。
+    quota: string | null
+    quotaCap: string
+    quotaUsed: string | null
+  }
+  seed: ActivityItemDto
+  seedBalance: string | null
+  seedBalanceKnown: boolean
+  sweetPotato: ActivityItemDto
+  sweetPotatoBalance: string | null
+  sweetPotatoBalanceKnown: boolean
+  luckCoin: ActivityItemDto
+  luckCoinBalance: string | null
+  luckCoinBalanceKnown: boolean
+  catalog: YishuHuanfuCatalogEntryDto[]
+  catalogLoaded: boolean
+  // 收购提成：好友把蜜薯卖进你的铺子后按比例产生。pending 为待领取数量。
+  commission: { pending: string, claimable: boolean, flag: string }
+  // 背包读取失败的原因；非空而余额又未知时，前端要把原因显示出来而不是只写 “--”。
+  balanceError: string
+  // true 表示这次没读到背包，当前数字是上一次成功值（可继续展示，不报错）。
+  balanceStale: boolean
+  daily: { dateKey: string, seedClaimed: boolean, shared: boolean, sharedToday: boolean }
+  actions: {
+    claimSeed: ActivityActionDto
+    sell: ActivityActionDto
+    share: ActivityActionDto
+    exchange: ActivityActionDto & { reason: string }
+  }
+}
+
 export interface QingMeiActivityDto {
   activityId: string
   dailyActivityId: string
@@ -492,118 +601,6 @@ export interface CharityRedFlowerActivityDto {
   }
 }
 
-export interface SweetPotatoSummaryDto {
-  activityId: string
-  groupId: string
-  title: string
-  active: boolean
-  startTime: number | null
-  endTime: number | null
-}
-
-/**
- * 以薯换福的详情 DTO（面板用）。
- *
- * 后端 `/api/activity-center/sweet-potato` 返回的是扁平结构（`basePrice` / `honey` /
- * `pendingCommission` …），这里统一归一化成面板需要的嵌套结构，页面与 Tab 只认这一层。
- * 与 `SweetPotatoSummaryDto` 分开：后者是活动目录用的四字段摘要，来自 `/activities`
- * 快照，两者的数据来源与生命周期都不同，混用会把目录卡片打空。
- */
-export interface SweetPotatoCatalogEntryDto {
-  index: number
-  itemId: string | null
-  name: string
-  nameKnown: boolean
-  price: string
-  status: number
-  limit: string
-  exchangedToday: string
-  image: string
-  exchangeable: boolean
-}
-
-export interface SweetPotatoFriendShopDto {
-  gid: string
-  name: string
-  avatar: string
-  level: string
-  own: boolean
-  // price 是基础价，bonus 是暴击加成，界面显示的「今日收购价」是两者之和 totalPrice。
-  price: string
-  bonus: string
-  totalPrice: string
-  quota: string
-  quotaCap: string
-  quotaUsed: string
-  // cmd 92 的 can_sell：true 收薯 / false 明确不收 / null 回包没带该字段（按可卖处理）。
-  canSell: boolean | null
-  // 自家铺子不占好友额度，界面显示「不限」而不是「还可收 N 个」。
-  unlimited: boolean
-  // 该铺子这次查询是否成功；失败时行情不可信，不能拿来比价。
-  available: boolean
-  error: string
-}
-
-export interface SweetPotatoRecordDto {
-  timestamp: string
-  gid: string
-  count: string
-  total: string
-  name: string
-  avatar: string
-  level: string
-  commission: string
-}
-
-export interface SweetPotatoActivityDto {
-  groupId: string
-  activityId: string
-  name: string
-  startTime: number | null
-  endTime: number | null
-  rules: ActivityRulesDto
-  active: boolean
-  serverTime: string
-  shop: {
-    gid: string
-    price: string
-    priceKnown: boolean
-    quoteTime: string
-    selfPrice: string
-    bonus: string
-    estimatedPrice: string | null
-    // 剩余接收额度只能靠 cmd 92 现查，快照里为 null。
-    quota: string | null
-    quotaCap: string
-    quotaUsed: string | null
-  }
-  seed: ActivityItemDto
-  seedBalance: string | null
-  seedBalanceKnown: boolean
-  sweetPotato: ActivityItemDto
-  sweetPotatoBalance: string | null
-  sweetPotatoBalanceKnown: boolean
-  luckCoin: ActivityItemDto
-  luckCoinBalance: string | null
-  luckCoinBalanceKnown: boolean
-  catalog: SweetPotatoCatalogEntryDto[]
-  catalogLoaded: boolean
-  // 收购提成：好友把蜜薯卖进你的铺子后按比例产生。pending 为待领取数量。
-  commission: { pending: string, claimable: boolean, flag: string }
-  // 背包读取失败的原因；非空而余额又未知时，前端要把原因显示出来而不是只写 "--"。
-  balanceError: string
-  // true 表示这次没读到背包，当前数字是上一次成功值（可继续展示，不报错）。
-  balanceStale: boolean
-  daily: { dateKey: string, seedClaimed: boolean, shared: boolean, sharedToday: boolean }
-  actions: {
-    claimSeed: ActivityActionDto
-    sell: ActivityActionDto
-    share: ActivityActionDto
-    exchange: ActivityActionDto & { reason: string }
-    commission: ActivityActionDto
-  }
-}
-
 export interface ActivityCenterSnapshotDto {
   serverTime: number | null
   activities: ActivityDirectoryItemDto[]
@@ -615,11 +612,11 @@ export interface ActivityCenterSnapshotDto {
   qingMei: QingMeiActivityDto | null
   charity: CharityRedFlowerActivityDto | null
   weather: WeatherActivityDto | null
-  sweetPotato: SweetPotatoSummaryDto | null
+  yishuHuanfu: YishuHuanfuActivityDto | null
   actions: ActivityActionsDto
 }
 
-export type ActivityMutationKey = 'claimPass' | 'lightConstellation' | 'claimSolar' | 'exchange' | 'claimQixiBridge' | 'giftQixiSachet' | 'claimQingMeiSeed' | 'startQingMeiBrew' | 'continueQingMeiBrew' | 'settleQingMeiBrew' | 'claimCharitySeeds' | 'donateCharityLove' | 'claimCharityDailyGift' | 'claimCharityProgress' | 'lightWeatherResearch' | 'buyWeatherBottle' | 'scanWeatherFriends' | 'collectWeatherBottle' | 'summonWeatherRain' | 'claimSweetPotatoSeed' | 'sellSweetPotato' | 'shareSweetPotatoShop' | 'exchangeSweetPotatoGoods' | 'refreshSweetPotatoQuote' | 'claimSweetPotatoCommission'
+export type ActivityMutationKey = 'claimPass' | 'lightConstellation' | 'claimSolar' | 'exchange' | 'claimQixiBridge' | 'giftQixiSachet' | 'claimQingMeiSeed' | 'startQingMeiBrew' | 'continueQingMeiBrew' | 'settleQingMeiBrew' | 'claimCharitySeeds' | 'donateCharityLove' | 'claimCharityDailyGift' | 'claimCharityProgress' | 'lightWeatherResearch' | 'buyWeatherBottle' | 'scanWeatherFriends' | 'collectWeatherBottle' | 'summonWeatherRain' | 'claimYishuHuanfuSeed' | 'sellYishuHuanfuSweetPotato' | 'shareYishuHuanfuShop' | 'exchangeYishuHuanfuGoods' | 'refreshYishuHuanfuQuote' | 'claimYishuHuanfuCommission'
 
 function isRecord(value: unknown): value is ActivityRecord {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -1008,13 +1005,13 @@ function normalizeSolarTerms(value: unknown): SolarTermsDto | null {
 export function normalizeActivityDirectory(value: unknown): ActivityDirectoryItemDto[] {
   return records(value).map((entry) => {
     const detailTarget = text(entry.detailTarget, entry.detail_target)
-    const normalizedDetailTarget = ['travel', 'constellation', 'shop', 'solar', 'qixi', 'qingmei', 'charity', 'weather', 'pet', 'wish', 'happy', 'milk', 'muge', 'sweetPotato'].includes(detailTarget)
+    const normalizedDetailTarget = ['travel', 'constellation', 'shop', 'solar', 'qixi', 'qingmei', 'charity', 'weather', 'pet', 'wish', 'happy', 'milk', 'muge', 'yishuhuanfu'].includes(detailTarget)
       ? detailTarget as ActivityTabKey
       : null
     const gameplayKey = text(entry.gameplayKey, entry.gameplay_key)
     const rawGameplayTargets = first(entry.gameplayTargets, entry.gameplay_targets)
     const gameplayTargets = Array.isArray(rawGameplayTargets)
-      ? rawGameplayTargets.map(value => text(value)).filter((value): value is ActivityTabKey => ['travel', 'constellation', 'shop', 'solar', 'qixi', 'qingmei', 'charity', 'weather', 'pet', 'wish', 'happy', 'milk', 'muge', 'sweetPotato'].includes(value))
+      ? rawGameplayTargets.map(value => text(value)).filter((value): value is ActivityTabKey => ['travel', 'constellation', 'shop', 'solar', 'qixi', 'qingmei', 'charity', 'weather', 'pet', 'wish', 'happy', 'milk', 'muge', 'yishuhuanfu'].includes(value))
       : []
     const id = text(entry.id, entry.activityId, entry.activity_id)
     const rawActivityIds = first(entry.activityIds, entry.activity_ids)
@@ -1046,8 +1043,8 @@ export function normalizeActivityDirectory(value: unknown): ActivityDirectoryIte
                       ? 'qingmei' as const
                       : gameplayKey === 'qixi' || normalizedDetailTarget === 'qixi'
                         ? 'qixi' as const
-                        : gameplayKey === 'sweetPotato' || normalizedDetailTarget === 'sweetPotato'
-                          ? 'sweetPotato' as const
+                        : gameplayKey === 'yishuhuanfu' || normalizedDetailTarget === 'yishuhuanfu'
+                          ? 'yishuhuanfu' as const
                           : gameplayKey === 'stellar' || normalizedDetailTarget
                             ? 'stellar' as const
                             : null,
@@ -1146,8 +1143,190 @@ function normalizeQixi(value: unknown): QixiActivityDto | null {
   }
 }
 
-function normalizeQingMei(value: unknown): QingMeiActivityDto | null {
+/**
+ * 背包余额的本地兜底。
+ *
+ * 余额来自游戏网关的 Bag 请求，偶发 `itempb.ItemService.Bag timeout`；后端一次读不到
+ * 就会把 balance 置空，界面上原本正常的数字瞬间变成 "--"，看起来像功能坏了。
+ * 但这个活动里的三份余额只会因为本页四个写操作（领种子/卖薯/兑换/分享）变化，而每次
+ * 写操作成功后后端都会回最新值，所以把最近一次成功值记在 localStorage 里复用，
+ * 比直接抹成 "--" 更诚实：数字是上一次的真实值，只是可能晚几秒刷新，同时标 stale。
+ */
+const YSHF_BALANCE_CACHE_KEY = 'yshf:balance-cache:v1'
+
+interface YshfBalanceCacheEntry {
+  seed: string | null
+  sweetPotato: string | null
+  luckCoin: string | null
+}
+
+function yshfBalanceCache(): Record<string, YshfBalanceCacheEntry> {
+  try {
+    const store = (globalThis as any).localStorage
+    const raw = store ? store.getItem(YSHF_BALANCE_CACHE_KEY) : null
+    const parsed = raw ? JSON.parse(raw) : null
+    return isRecord(parsed) ? parsed as Record<string, YshfBalanceCacheEntry> : {}
+  } catch {
+    return {}
+  }
+}
+
+function writeYshfBalanceCache(key: string, entry: YshfBalanceCacheEntry) {
+  if (!key)
+    return
+  try {
+    const store = (globalThis as any).localStorage
+    if (!store)
+      return
+    const cache = yshfBalanceCache()
+    cache[key] = entry
+    store.setItem(YSHF_BALANCE_CACHE_KEY, JSON.stringify(cache))
+  } catch {
+    // localStorage 不可用（隐私模式 / 配额满）时忽略，不影响主流程。
+  }
+}
+
+function applyYishuHuanfuBalanceFallback(dto: YishuHuanfuActivityDto): YishuHuanfuActivityDto {
+  const key = dto.shop.gid || dto.activityId
+  const cached = key ? yshfBalanceCache()[key] : undefined
+  const result: YishuHuanfuActivityDto = { ...dto }
+  let usedCache = false
+
+  if (!result.seedBalanceKnown && cached?.seed !== null && cached?.seed !== undefined) {
+    result.seedBalance = cached.seed
+    result.seedBalanceKnown = true
+    usedCache = true
+  }
+  if (!result.sweetPotatoBalanceKnown && cached?.sweetPotato !== null && cached?.sweetPotato !== undefined) {
+    result.sweetPotatoBalance = cached.sweetPotato
+    result.sweetPotatoBalanceKnown = true
+    usedCache = true
+  }
+  if (!result.luckCoinBalanceKnown && cached?.luckCoin !== null && cached?.luckCoin !== undefined) {
+    result.luckCoinBalance = cached.luckCoin
+    result.luckCoinBalanceKnown = true
+    usedCache = true
+  }
+
+  if (usedCache) {
+    // 沿用旧值时不显示红色报错，只留一句弱提示。
+    result.balanceStale = true
+    result.balanceError = ''
+  }
+
+  // 只要这次至少拿到一项真实值就把缓存刷新（未拿到的项保留旧值，避免被 null 覆盖）。
+  if (dto.seedBalanceKnown || dto.sweetPotatoBalanceKnown || dto.luckCoinBalanceKnown) {
+    writeYshfBalanceCache(key, {
+      seed: dto.seedBalanceKnown ? dto.seedBalance : (cached?.seed ?? null),
+      sweetPotato: dto.sweetPotatoBalanceKnown ? dto.sweetPotatoBalance : (cached?.sweetPotato ?? null),
+      luckCoin: dto.luckCoinBalanceKnown ? dto.luckCoinBalance : (cached?.luckCoin ?? null),
+    })
+  }
+
+  return result
+}
+
+function normalizeYishuHuanfu(value: unknown): YishuHuanfuActivityDto | null {
   if (!isRecord(value))
+    return null
+  const raw = value
+  const actions = record(raw.actions)
+  const shop = record(raw.shop)
+  const daily = record(raw.daily)
+  const seed = record(raw.seed)
+  const sweetPotato = record(raw.sweetPotato)
+  const luckCoin = record(raw.luckCoin)
+  const action = (key: string) => normalizeAction(actions, {}, [key])
+  const normalized: YishuHuanfuActivityDto = {
+    groupId: text(raw.groupId, raw.group_id),
+    activityId: text(raw.activityId, raw.activity_id),
+    name: text(raw.name, '以薯换福'),
+    startTime: toMilliseconds(first(raw.startTime, raw.start_time)),
+    endTime: toMilliseconds(first(raw.endTime, raw.end_time)),
+    rules: normalizeRules(raw.rules),
+    active: bool(raw.active),
+    serverTime: text(raw.serverTime, raw.server_time),
+    shop: {
+      gid: text(shop.gid),
+      price: text(shop.price),
+      priceKnown: bool(shop.priceKnown, shop.price_known),
+      quoteTime: text(shop.quoteTime, shop.quote_time),
+      selfPrice: text(shop.selfPrice, shop.self_price),
+      bonus: text(shop.bonus),
+      estimatedPrice: shop.estimatedPrice === null || shop.estimatedPrice === undefined
+        ? null
+        : text(shop.estimatedPrice),
+      quota: shop.quota === null || shop.quota === undefined ? null : text(shop.quota),
+      quotaCap: text(shop.quotaCap, shop.quota_cap),
+      quotaUsed: shop.quotaUsed === null || shop.quotaUsed === undefined ? null : text(shop.quotaUsed),
+    },
+    seed: normalizeItem(seed),
+    seedBalance: seed.balance === null || seed.balance === undefined ? null : text(seed.balance),
+    seedBalanceKnown: bool(seed.balanceKnown, seed.balance_known),
+    sweetPotato: normalizeItem(sweetPotato),
+    sweetPotatoBalance: sweetPotato.balance === null || sweetPotato.balance === undefined ? null : text(sweetPotato.balance),
+    sweetPotatoBalanceKnown: bool(sweetPotato.balanceKnown, sweetPotato.balance_known),
+    luckCoin: normalizeItem(luckCoin),
+    luckCoinBalance: luckCoin.balance === null || luckCoin.balance === undefined ? null : text(luckCoin.balance),
+    luckCoinBalanceKnown: bool(luckCoin.balanceKnown, luckCoin.balance_known),
+    catalog: records(raw.catalog).map(entry => ({
+      index: finiteNumber(first(entry.index)) || 0,
+      itemId: entry.itemId === null || entry.itemId === undefined ? null : text(entry.itemId),
+      name: text(entry.name),
+      nameKnown: bool(entry.nameKnown, entry.name_known),
+      price: text(entry.price),
+      status: finiteNumber(first(entry.status)) || 0,
+      limit: text(entry.limit),
+      exchangedToday: text(entry.exchangedToday, entry.exchanged_today, '0'),
+      image: text(entry.image),
+      // 可兑性由 cmd 97 的 exchangeable 决定；缺这个字段（例如后端只透传了目录骨架）
+      // 时按“可兑”处理，价格够不够再由渲染层按余额判一次。
+      // 早期这里写死 false，导致 loadCatalog 拿到的目录被 applySnapshot 再归一化后
+      // 整排变成「暂不可兑」，福气币再多也点不动。
+      exchangeable: entry.exchangeable === null || entry.exchangeable === undefined
+        ? true
+        : bool(entry.exchangeable),
+    })),
+    catalogLoaded: bool(raw.catalogLoaded, raw.catalog_loaded),
+    commission: {
+      pending: text(record(raw.commission).pending),
+      claimable: bool(record(raw.commission).claimable),
+      flag: text(record(raw.commission).flag),
+    },
+    balanceError: text(raw.balanceError, raw.balance_error),
+    balanceStale: bool(raw.balanceStale, raw.balance_stale),
+    daily: {
+      dateKey: text(daily.dateKey, daily.date_key),
+      seedClaimed: bool(daily.seedClaimed, daily.seed_claimed),
+      shared: bool(daily.shared),
+      sharedToday: bool(daily.sharedToday, daily.shared_today, daily.quoteGeneratedToday, daily.quote_generated_today),
+    },
+    actions: {
+      claimSeed: action('claimSeed'),
+      sell: action('sell'),
+      share: action('share'),
+      exchange: { ...action('exchange'), reason: text(record(actions.exchange).reason) },
+    },
+  }
+  return applyYishuHuanfuBalanceFallback(normalized)
+}
+
+/**
+ * 活动详情快照不带兑换目录（cmd 97 是独立命令），每次轮询刷新都会把已加载的目录清空，
+ * 表现就是档位闪一下没了、按钮回到「未加载」。这里保留上一次的目录，
+ * 页面主动刷新时会再用 cmd 97 拉一遍最新价与剩余次数。
+ */
+function keepCatalogOnRefresh(previous: Record<string, unknown>, incoming: unknown): unknown {
+  const next = record(incoming)
+  if (records(next.catalog).length > 0)
+    return incoming
+  const previousCatalog = records(previous.catalog)
+  if (previousCatalog.length === 0)
+    return incoming
+  return { ...next, catalog: previousCatalog, catalogLoaded: true }
+}
+
+function normalizeQingMei(value: unknown): QingMeiActivityDto | null {  if (!isRecord(value))
     return null
   const raw = value
   const actions = record(raw.actions)
@@ -1650,21 +1829,6 @@ function normalizeAction(actions: ActivityRecord, capabilities: ActivityRecord, 
   }
 }
 
-function normalizeSweetPotatoSummary(value: unknown): SweetPotatoSummaryDto | null {
-  const raw = record(value)
-  const activityId = text(raw.activityId, raw.activity_id)
-  if (!activityId || (raw.active === undefined && !raw.title))
-    return null
-  return {
-    activityId,
-    groupId: text(raw.groupId, raw.group_id),
-    title: text(raw.title) || '以薯换福',
-    active: raw.active === true,
-    startTime: toMilliseconds(first(raw.startTime, raw.start_time)),
-    endTime: toMilliseconds(first(raw.endTime, raw.end_time)),
-  }
-}
-
 export function normalizeActivitySnapshot(value: unknown): ActivityCenterSnapshotDto {
   const envelope = record(value)
   const root = record(first(envelope.snapshot, envelope.data, value))
@@ -1681,9 +1845,9 @@ export function normalizeActivitySnapshot(value: unknown): ActivityCenterSnapsho
     constellation: normalizeConstellation(first(root.constellation, root.constellationActivity, seasonRecord.constellation, seasonRecord.constellationActivity, seasonRecord.starContract, seasonRecord.contract)),
     qixi: normalizeQixi(first(root.qixi, root.qiXi, root.qi_xi)),
     qingMei: normalizeQingMei(first(root.qingMei, root.qingmei, root.qing_mei)),
+    yishuHuanfu: normalizeYishuHuanfu(first(root.yishuHuanfu, root.yishuhuanfu, root.yishu_huanfu)),
     charity: normalizeCharityRedFlower(first(root.charity, root.charityRedFlower, root.charity_red_flower)),
     weather: normalizeWeather(first(root.weather, root.weatherActivity, root.weather_activity)),
-    sweetPotato: normalizeSweetPotatoSummary(first(root.sweetPotato, root.sweet_potato)),
     actions: {
       claimPass: normalizeAction(actionsRaw, capabilitiesRaw, ['claimPass', 'passClaim', 'pass_claim']),
       lightConstellation: normalizeAction(actionsRaw, capabilitiesRaw, ['lightConstellation', 'constellationLight', 'constellation_light']),
@@ -1699,146 +1863,33 @@ export function normalizeActivitySnapshot(value: unknown): ActivityCenterSnapsho
   }
 }
 
-/**
- * 后端把活动说明直接给成字符串数组（一行一条），跟其它活动的 `{ paragraphs }` 不同。
- * 直接丢给 `normalizeRules` 会被 `record()` 判成空对象，整块说明在界面上消失。
- */
-function normalizeSweetPotatoRules(value: unknown): ActivityRulesDto {
-  if (Array.isArray(value)) {
-    const paragraphs = value
-      .filter((entry): entry is string | number => typeof entry === 'string' || typeof entry === 'number')
-      .map(plainText)
-      .filter(Boolean)
-    return { title: '', paragraphs, lines: [...paragraphs] }
-  }
-  return normalizeRules(value)
-}
-
-/** 后端 actions 里的单条动作（`{ enabled, available }`）→ 面板统一动作结构。 */function normalizeSweetPotatoAction(value: unknown, fallback = false): ActivityActionDto {
-  const entry = record(value)
-  const enabled = entry.enabled === undefined ? fallback : bool(entry.enabled)
-  return {
-    enabled,
-    available: entry.available === undefined ? enabled : bool(entry.available),
-    availabilityKnown: true,
-    count: null,
-  }
-}
-
-/** 背包道具：数量未知时 count 置空串，界面按 `*BalanceKnown` 决定显示数字还是 `--`。 */
-function sweetPotatoItem(name: string, count: string, known: boolean, image: string): ActivityItemDto {
-  return {
-    id: '',
-    name,
-    count: known ? count : '',
-    image,
-    rarity: null,
-  }
-}
-
-/** 十进制定点字符串相加，避免 0.1 + 0.2 这种浮点误差进到价格里。 */
-function decimalSum(left: string, right: string): string {
-  const a = Number(left)
-  const b = Number(right)
-  if (!Number.isFinite(a) || !Number.isFinite(b))
-    return left || right || '0'
-  return String(a + b)
-}
-
-/**
- * 后端 `/api/activity-center/sweet-potato`（扁平结构）→ 面板 DTO（嵌套结构）。
- *
- * 字段逐个显式映射，不做 `{ ...raw }` 透传：后端改字段名时这里会立刻退化成 0 / 空串，
- * 比静默把旧字段带进界面更容易发现。图标字段后端不返回，由调用方按静态资源补齐。
- */
-export function normalizeSweetPotatoActivity(value: unknown, icons: { seed?: string, sweetPotato?: string, luckCoin?: string } = {}): SweetPotatoActivityDto | null {
-  if (!isRecord(value))
-    return null
-  const raw = value
-  const actions = record(raw.actions)
-  const balancesKnown = raw.balancesKnown === undefined ? true : bool(raw.balancesKnown, raw.balances_known)
-  const basePrice = text(raw.basePrice, raw.base_price, '0')
-  const bonusPrice = text(raw.bonusPrice, raw.bonus_price, '0')
-  const totalPrice = text(raw.price, decimalSum(basePrice, bonusPrice))
-  const seedClaimed = bool(raw.seedClaimed, raw.seed_claimed)
-  const shareClaimed = bool(raw.shareClaimed, raw.share_claimed)
-  const pendingCommission = text(raw.pendingCommission, raw.pending_commission, '0')
-  const seeds = text(raw.seeds, '0')
-  const honey = text(raw.honey, '0')
-  const coins = text(raw.coinsInBag, raw.coins_in_bag, '0')
-  const activityId = text(raw.activityId, raw.activity_id)
-  return {
-    groupId: text(raw.groupId, raw.group_id),
-    activityId,
-    name: text(raw.title, raw.name, '以薯换福'),
-    startTime: toMilliseconds(first(raw.startTime, raw.start_time)),
-    endTime: toMilliseconds(first(raw.endTime, raw.end_time)),
-    rules: normalizeSweetPotatoRules(raw.rules),
-    active: bool(raw.active),
-    serverTime: text(raw.serverTime, raw.server_time),
-    shop: {
-      // 铺主 GID：后端下发真实 GID，换账号时它会变，Tab 靠这个清掉上一个账号的出售目标。
-      // 早先没有这个字段、拿 activityId 兜底，而 activityId 各账号都一样，切号后不会重置。
-      gid: text(raw.shopGid, raw.shop_gid),
-      price: basePrice,
-      priceKnown: raw.priceKnown === undefined ? Number(basePrice) > 0 : bool(raw.priceKnown, raw.price_known),
-      quoteTime: text(raw.quoteTime, raw.quote_time),
-      selfPrice: basePrice,
-      bonus: bonusPrice,
-      estimatedPrice: Number(totalPrice) > 0 ? totalPrice : null,
-      // 剩余接收额度只能靠 cmd 92 现查，快照里拿不到。
-      // quotaCap 也留空：后端的 capacity 是累计接收总量（实机 14024），
-      // 与每日额度（dailyQuota，实机 8000）不是一个口径，拿它当进度条分母会算出错误百分比。
-      // 真正的每日上限由 refreshSweetPotatoQuote 从 cmd 92 回包补。
-      quota: null,
-      quotaCap: '',
-      quotaUsed: null,
-    },
-    seed: sweetPotatoItem('红薯种子', seeds, balancesKnown, icons.seed || ''),
-    seedBalance: balancesKnown ? seeds : null,
-    seedBalanceKnown: balancesKnown,
-    sweetPotato: sweetPotatoItem('蜜薯', honey, balancesKnown, icons.sweetPotato || ''),
-    sweetPotatoBalance: balancesKnown ? honey : null,
-    sweetPotatoBalanceKnown: balancesKnown,
-    // 福气币余额取背包里的 1033：状态槽的 coins 是累计口径，拿来当可用余额会虚高。
-    luckCoin: sweetPotatoItem('福气币', coins, balancesKnown, icons.luckCoin || ''),
-    luckCoinBalance: balancesKnown ? coins : null,
-    luckCoinBalanceKnown: balancesKnown,
-    catalog: [],
-    catalogLoaded: false,
-    commission: {
-      pending: pendingCommission,
-      claimable: raw.commissionClaimable === undefined
-        ? Number(pendingCommission) > 0
-        : bool(raw.commissionClaimable, raw.commission_claimable),
-      flag: '',
-    },
-    balanceError: text(raw.balanceError, raw.balance_error),
-    balanceStale: bool(raw.balanceStale, raw.balance_stale),
-    daily: {
-      dateKey: '',
-      seedClaimed,
-      shared: shareClaimed,
-      // 后端只给 share_claimed 一个标记：它同时代表「今天分享过」与「暴击已落地」。
-      sharedToday: shareClaimed,
-    },
-    actions: {
-      claimSeed: normalizeSweetPotatoAction(actions.claim ?? actions.claimSeed, !seedClaimed),
-      sell: normalizeSweetPotatoAction(actions.sell, Number(honey) > 0),
-      share: normalizeSweetPotatoAction(actions.share, !shareClaimed),
-      exchange: {
-        ...normalizeSweetPotatoAction(actions.exchange, bool(raw.active)),
-        reason: raw.catalogAvailable === false ? '兑换目录未就绪' : '',
-      },
-      commission: normalizeSweetPotatoAction(actions.commission, Number(pendingCommission) > 0),
-    },
-  }
-}
-
 const activityErrorMessages: Record<string, string> = {
   1034038: '当前没有可点亮或可领取的星宿奖励，可能已经领取过，请稍后或明天再来看看',
   1034001: '当前活动暂不可操作，请稍后再试',
   1034002: '活动尚未开放或已经结束',
+  1034177: '今日红薯种子已经领取，明天再来领取',
+  YSHF_UNAVAILABLE: '以薯换福活动暂未开放或已经结束',
+  YSHF_INACTIVE: '以薯换福活动未在活动期内',
+  YSHF_SEED_ALREADY_CLAIMED: '今日红薯种子已经领取，明天再来领取',
+  YSHF_SHARE_ALREADY_DONE: '今日铺子已经分享过了，明天再来',
+  YSHF_QUOTE_NOT_READY: '今日收购价尚未生成，请先领取红薯种子',
+  YSHF_OWN_GID_UNKNOWN: '暂时无法确定本人 GID，请稍后重试',
+  YSHF_BALANCE_UNKNOWN: '读取不到蜜薯数量，请稍后重试',
+  INSUFFICIENT_YSHF_SWEET_POTATO: '蜜薯数量不足，无法完成本次出售',
+  INSUFFICIENT_YSHF_LUCK_COIN: '福气币不足，无法完成本次兑换',
+  YSHF_EXCEED_LIMIT: '兑换数量超过本档剩余可兑换次数',
+  INVALID_YSHF_EXCHANGE_COUNT: '兑换数量必须是正整数',
+  INVALID_YSHF_CATALOG_INDEX: '商品序号无效，请刷新兑换商店后重试',
+  YSHF_CATALOG_ENTRY_NOT_FOUND: '商品序号无效，请刷新兑换商店后重试',
+  YSHF_RESPONSE_INVALID: '以薯换福活动数据已经变化，请刷新页面后重试',
+  YSHF_NO_COMMISSION: '当前没有可领取的收购提成',
+  YSHF_GID_UNKNOWN: '未获取到本人 gid，请稍后重试',
+  YSHF_RESULT_UNKNOWN: '服务端回包与请求不一致，请刷新活动后再核对',
+  YSHF_SHOP_UNKNOWN: '无法确认该铺子的主人，本次未出售',
+  YSHF_SHOP_QUOTA_INSUFFICIENT: '目标铺子的剩余接收额度不足，本次未出售',
+  INVALID_YSHF_SELL_COUNT: '出售数量必须是正整数',
+  INVALID_YSHF_FRIEND_GID: '目标铺子 GID 无效',
+  INVALID_YSHF_SHOP_GID: '目标铺子 GID 无效',
   NO_PASS_REWARD: '当前没有可领取的游记奖励，请完成新的游记等级后再试',
   SOLAR_TERM_UNAVAILABLE: '当前节令奖励暂不可领取，请在开放后再试',
   CONSTELLATION_UNAVAILABLE: '观星礼录活动暂未开放或已经结束',
@@ -1923,11 +1974,16 @@ const activityErrorMessages: Record<string, string> = {
 }
 
 function errorMessage(error: unknown, fallback = '活动数据加载失败') {
-  const candidate = error as { response?: { data?: { error?: unknown, message?: unknown, errorCode?: unknown } }, message?: unknown, code?: unknown }
+  const candidate = error as { response?: { data?: { error?: unknown, message?: unknown, errorCode?: unknown, errorDetail?: unknown } }, message?: unknown, code?: unknown, detail?: unknown }
   const rawMessage = String(candidate.response?.data?.error || candidate.response?.data?.message || candidate.message || '')
   const errorCode = String(candidate.response?.data?.errorCode || candidate.code || rawMessage.match(/\bcode=(\d+)\b/)?.[1] || '')
   if (activityErrorMessages[errorCode])
     return activityErrorMessages[errorCode]
+  // 后端兜底时会带 errorDetail（服务端原始原因）。把 gamepb 前缀和 code= 去掉再展示，
+  // 免得用户只看到“活动操作失败，请刷新页面后重试”这种没有任何信息量的文案。
+  const detail = String(candidate.response?.data?.errorDetail || candidate.detail || '').replace(/^[\w.]*code=\d+\s*/, '').trim()
+  if (detail && !/^活动操作失败/.test(detail))
+    return detail
   if (rawMessage.includes('当前无可领取的奖励节点'))
     return activityErrorMessages['1034038']!
   if (rawMessage.includes('当前没有可领取的游记奖励'))
@@ -1942,8 +1998,9 @@ function errorMessage(error: unknown, fallback = '活动数据加载失败') {
 function responsePayload(value: unknown): unknown {
   const response = record(value)
   if (response.ok === false) {
-    const responseError = new Error(text(response.error, response.message, '活动接口返回失败')) as Error & { code?: string }
+    const responseError = new Error(text(response.error, response.message, '活动接口返回失败')) as Error & { code?: string, detail?: string }
     responseError.code = text(response.errorCode, response.error_code, response.code)
+    responseError.detail = text(response.errorDetail, response.error_detail)
     throw responseError
   }
   return response.data !== undefined ? response.data : value
@@ -1979,33 +2036,33 @@ export const useActivityCenterStore = defineStore('activity-center', () => {
     scanWeatherFriends: false,
     collectWeatherBottle: false,
     summonWeatherRain: false,
-    claimSweetPotatoSeed: false,
-    sellSweetPotato: false,
-    shareSweetPotatoShop: false,
-    exchangeSweetPotatoGoods: false,
-    refreshSweetPotatoQuote: false,
-    claimSweetPotatoCommission: false,
+    claimYishuHuanfuSeed: false,
+    exchangeYishuHuanfuGoods: false,
+    sellYishuHuanfuSweetPotato: false,
+    shareYishuHuanfuShop: false,
+    refreshYishuHuanfuQuote: false,
+    claimYishuHuanfuCommission: false,
   })
 
   const weatherFriends = ref<WeatherFriendDto[]>([])
   const weatherFriendsLoading = ref(false)
   const weatherFriendInspectingGid = ref('')
 
-  // 以薯换福的详情单独存一个 ref，不塞进 snapshot：
-  // snapshot.sweetPotato 是活动目录用的四字段摘要（来自 /activities），把它换成详情会打空目录卡片，
-  // 而且详情里含 catalog 这种大数组，混进快照会被每次轮询整体归一化，白跑一遍。
-  const sweetPotatoDetail = ref<SweetPotatoActivityDto | null>(null)
-  const sweetPotatoDetailLoading = ref(false)
-  const sweetPotatoFriendShops = ref<SweetPotatoFriendShopDto[]>([])
-  const sweetPotatoFriendShopsLoading = ref(false)
-  const sweetPotatoFriendScanAt = ref(0)
-  const sweetPotatoFriendScanNote = ref('')
-  const sweetPotatoFriendShopsAccountId = ref('')
-  const sweetPotatoRecords = ref<SweetPotatoRecordDto[]>([])
-  const sweetPotatoRecordsLoading = ref(false)
-  const sweetPotatoRecordsNote = ref('')
-  const sweetPotatoRecordsLoaded = ref(false)
-  const sweetPotatoRecordsAccountId = ref('')
+  // 好友铺子比价是独立命令（cmd 92 批量扫描），不进快照，避免每次刷新都扫一遍好友。
+  const yishuHuanfuFriendShops = ref<YishuHuanfuFriendShopDto[]>([])
+  const yishuHuanfuFriendShopsLoading = ref(false)
+  const yishuHuanfuFriendScanAt = ref(0)
+  const yishuHuanfuFriendScanNote = ref('')
+  // 收购记录（cmd 95）是独立查询，不放在快照里，避免每次轮询都多打一次网关。
+  // recordsAccountId 记录这份列表属于哪个账号：切号时必须整份丢掉，否则会把上一个账号的
+  // 记录当成当前账号的显示（页面守卫还会因为「已有数据」直接跳过请求）。
+  const yishuHuanfuRecords = ref<YishuHuanfuRecordDto[]>([])
+  const yishuHuanfuRecordsLoading = ref(false)
+  const yishuHuanfuRecordsNote = ref('')
+  const yishuHuanfuRecordsAccountId = ref('')
+  const yishuHuanfuRecordsLoaded = ref(false)
+  // 比价结果同理：好友列表是按账号取的，切号后旧列表必须清掉。
+  const yishuHuanfuFriendShopsAccountId = ref('')
 
   const season = computed(() => snapshot.value.season)
   const activities = computed(() => snapshot.value.activities)
@@ -2014,8 +2071,8 @@ export const useActivityCenterStore = defineStore('activity-center', () => {
   const solar = solarTerms
   const constellation = computed(() => snapshot.value.constellation)
   const qixi = computed(() => snapshot.value.qixi)
-  const sweetPotato = computed(() => snapshot.value.sweetPotato)
   const qingMei = computed(() => snapshot.value.qingMei)
+  const yishuHuanfu = computed(() => snapshot.value.yishuHuanfu)
   const charity = computed(() => snapshot.value.charity)
   const weather = computed<WeatherActivityDto | null>(() => {
     const value = snapshot.value.weather
@@ -2038,6 +2095,12 @@ export const useActivityCenterStore = defineStore('activity-center', () => {
 
   function reset() {
     requestVersion.value += 1
+    // 在途的 loadDetails 一并作废：切号后复用同一 accountId 的旧 Promise 会把
+    // 上一个会话的数据写回快照。
+    pendingLoads.clear()
+    clearYishuHuanfuFriendShops()
+    // 收购记录也属于具体账号，整份重置时一起清掉，避免切号后残留。
+    clearYishuHuanfuRecords()
     snapshot.value = normalizeActivitySnapshot({})
     loading.value = false
     error.value = ''
@@ -2046,12 +2109,7 @@ export const useActivityCenterStore = defineStore('activity-center', () => {
     loadedAccountId.value = ''
     serverClockOffset.value = 0
     clearWeatherFriends()
-    // 旧账号在途的 load promise 不能留给新账号复用：它的 version 已被上面的 ++ 作废，
-    // 复用会让 refresh(force) 返回 false 且不发任何请求，活动页一片空白。
-    pendingLoads.clear()
-    pendingActions.value = { claimPass: false, lightConstellation: false, claimSolar: false, exchange: false, claimQixiBridge: false, giftQixiSachet: false, claimQingMeiSeed: false, startQingMeiBrew: false, continueQingMeiBrew: false, settleQingMeiBrew: false, claimCharitySeeds: false, donateCharityLove: false, claimCharityDailyGift: false, claimCharityProgress: false, lightWeatherResearch: false, buyWeatherBottle: false, scanWeatherFriends: false, collectWeatherBottle: false, summonWeatherRain: false, claimSweetPotatoSeed: false, sellSweetPotato: false, shareSweetPotatoShop: false, exchangeSweetPotatoGoods: false, refreshSweetPotatoQuote: false, claimSweetPotatoCommission: false }
-    clearSweetPotatoFriendShops()
-    clearSweetPotatoRecords()
+    pendingActions.value = { claimPass: false, lightConstellation: false, claimSolar: false, exchange: false, claimQixiBridge: false, giftQixiSachet: false, claimQingMeiSeed: false, startQingMeiBrew: false, continueQingMeiBrew: false, settleQingMeiBrew: false, claimCharitySeeds: false, donateCharityLove: false, claimCharityDailyGift: false, claimCharityProgress: false, lightWeatherResearch: false, buyWeatherBottle: false, scanWeatherFriends: false, collectWeatherBottle: false, summonWeatherRain: false, claimYishuHuanfuSeed: false, sellYishuHuanfuSweetPotato: false, shareYishuHuanfuShop: false, exchangeYishuHuanfuGoods: false, refreshYishuHuanfuQuote: false, claimYishuHuanfuCommission: false }
   }
 
   function clearActionMessages() {
@@ -2059,15 +2117,9 @@ export const useActivityCenterStore = defineStore('activity-center', () => {
     notice.value = ''
   }
 
-  /** 只校验「当前账号还是不是这一个」，不看请求版本号。 */
-  function isCurrentAccount(accountId: string) {
-    if (typeof localStorage === 'undefined')
-      return true
-    return String(localStorage.getItem('current_account_id') || '') === accountId
-  }
-
   function isCurrent(version: number, accountId: string) {
-    return requestVersion.value === version && isCurrentAccount(accountId)
+    const storedAccountId = typeof localStorage === 'undefined' ? accountId : String(localStorage.getItem('current_account_id') || '')
+    return requestVersion.value === version && storedAccountId === accountId
   }
 
   function applySnapshot(value: unknown, clientStartedAt = Date.now()) {
@@ -2097,7 +2149,7 @@ export const useActivityCenterStore = defineStore('activity-center', () => {
     error.value = ''
     try {
       let detail: unknown
-      let detailKey: 'season' | 'qixi' | 'qingMei' | 'charity' | 'weather' | null = null
+      let detailKey: 'season' | 'qixi' | 'qingMei' | 'charity' | 'weather' | 'yishuHuanfu' | null = null
       if (gameplayKey === 'qixi') {
         const response = await api.get('/api/activity-center/qixi', { headers: { 'x-account-id': requestedAccountId }, skipErrorToast: true } as any)
         detail = responsePayload(response.data)
@@ -2107,6 +2159,11 @@ export const useActivityCenterStore = defineStore('activity-center', () => {
         const response = await api.get('/api/activity-center/qingmei', { headers: { 'x-account-id': requestedAccountId }, skipErrorToast: true } as any)
         detail = responsePayload(response.data)
         detailKey = 'qingMei'
+      }
+      else if (gameplayKey === 'yishuhuanfu') {
+        const response = await api.get('/api/activity-center/yishuhuanfu', { headers: { 'x-account-id': requestedAccountId }, skipErrorToast: true } as any)
+        detail = responsePayload(response.data)
+        detailKey = 'yishuHuanfu'
       }
       else if (gameplayKey === 'charity') {
         const response = await api.get('/api/activity-center/charity-red-flower', { headers: { 'x-account-id': requestedAccountId }, skipErrorToast: true } as any)
@@ -2126,6 +2183,8 @@ export const useActivityCenterStore = defineStore('activity-center', () => {
         return false
       if (detailKey) {
         const current = record(snapshot.value)
+        if (detailKey === 'yishuHuanfu')
+          detail = keepCatalogOnRefresh(record(current.yishuHuanfu), detail)
         applySnapshot({ ...current, [detailKey]: detail }, clientStartedAt)
       }
       else {
@@ -2207,10 +2266,7 @@ export const useActivityCenterStore = defineStore('activity-center', () => {
     const requestedAccountId = String(accountId || '').trim()
     if (!requestedAccountId || pendingActions.value[key])
       return false
-    // 取得独占版本：切号 watch 与 refresh 都会 ++requestVersion，如果 mutate 只是读当前值，
-    // 任何并发加载都会把「后端已执行成功」的操作结果判为过期而静默丢弃，用户点了没反应、
-    // 往往重复点击造成重复领取。让并发加载让位于用户主动发起的操作。
-    const version = ++requestVersion.value
+    const version = requestVersion.value
     pendingActions.value[key] = true
     actionError.value = ''
     notice.value = ''
@@ -2254,7 +2310,18 @@ export const useActivityCenterStore = defineStore('activity-center', () => {
           })
         }
         else {
-          applySnapshot(mutationSnapshot)
+          // 写操作回包里的活动快照同样不带 cmd 97 目录，保留上一次已加载的档位。
+          const previousDetail = record(record(snapshot.value).yishuHuanfu)
+          const nextRecord = record(mutationSnapshot)
+          if (Object.prototype.hasOwnProperty.call(nextRecord, 'yishuHuanfu')) {
+            applySnapshot({
+              ...nextRecord,
+              yishuHuanfu: keepCatalogOnRefresh(previousDetail, nextRecord.yishuHuanfu),
+            })
+          }
+          else {
+            applySnapshot(mutationSnapshot)
+          }
         }
       }
       else {
@@ -2311,8 +2378,267 @@ export const useActivityCenterStore = defineStore('activity-center', () => {
     return mutate('claimQixiBridge', '/qixi/bridge/claim', accountId)
   }
 
+  function claimYishuHuanfuSeeds(accountId: string) {
+    return mutate('claimYishuHuanfuSeed', '/yishuhuanfu/seed/claim', accountId)
+  }
+
+  // 不传 friendGid 时卖给自己铺子，传了则占用对方每日接收额度；count 缺省卖出背包全部。
+  function sellYishuHuanfuSweetPotato(accountId: string, friendGid = '', count: number | null = null) {
+    const payload: Record<string, unknown> = {}
+    if (friendGid)
+      payload.friendGid = friendGid
+    if (count !== null && Number.isFinite(count) && count > 0)
+      payload.count = Math.floor(count)
+    return mutate('sellYishuHuanfuSweetPotato', '/yishuhuanfu/sell', accountId, payload)
+  }
+
+  function shareYishuHuanfuShop(accountId: string) {
+    return mutate('shareYishuHuanfuShop', '/yishuhuanfu/share', accountId)
+  }
+
+  // 领取收购提成（cmd 99）。提成只来自“好友把蜜薯卖进你的铺子”，自己卖自己不产生。
+  function claimYishuHuanfuCommission(accountId: string) {
+    return mutate('claimYishuHuanfuCommission', '/yishuhuanfu/commission/claim', accountId)
+  }
+
+  // 收购记录列表（cmd 95）。独立查询、不进快照，避免每次轮询多打一次网关。
+  // 列表按账号隔离：换账号先同步清空再请求，旧账号的迟到回包直接丢弃。
+  // force=true 用于进页面/手动刷新；不带 force 时同一账号已加载过就不再打网关。
+  async function loadYishuHuanfuRecords(accountId: string, force = false) {
+    const requestedAccountId = String(accountId || '').trim()
+    if (!requestedAccountId)
+      return false
+    if (yishuHuanfuRecordsAccountId.value !== requestedAccountId)
+      clearYishuHuanfuRecords()
+    yishuHuanfuRecordsAccountId.value = requestedAccountId
+    // 同一账号的请求还在路上，别叠加第二个。
+    if (yishuHuanfuRecordsLoading.value)
+      return false
+    if (!force && yishuHuanfuRecordsLoaded.value)
+      return true
+    yishuHuanfuRecordsLoading.value = true
+    try {
+      const response = await api.get('/api/activity-center/yishuhuanfu/records', {
+        headers: { 'x-account-id': requestedAccountId },
+        skipErrorToast: true,
+      } as any)
+      const payload = record(responsePayload(response.data))
+      // 请求期间又切了账号：这份回包属于上一个账号，写进去就是串号。
+      if (yishuHuanfuRecordsAccountId.value !== requestedAccountId)
+        return false
+      yishuHuanfuRecords.value = records(payload.records).map(entry => ({
+        timestamp: text(entry.timestamp),
+        gid: text(entry.gid),
+        count: text(entry.count),
+        total: text(entry.total),
+        name: text(entry.name),
+        avatar: text(entry.avatar),
+        level: text(entry.level),
+        commission: text(entry.commission),
+      }))
+      yishuHuanfuRecordsNote.value = text(payload.message)
+      yishuHuanfuRecordsLoaded.value = true
+      return true
+    } catch (error) {
+      if (yishuHuanfuRecordsAccountId.value === requestedAccountId)
+        yishuHuanfuRecordsNote.value = errorMessage(error, '收购记录加载失败')
+      return false
+    } finally {
+      // 只有仍然属于这个账号时才关掉 loading，避免旧请求把新账号的加载态提前结束。
+      if (yishuHuanfuRecordsAccountId.value === requestedAccountId)
+        yishuHuanfuRecordsLoading.value = false
+    }
+  }
+
+  function clearYishuHuanfuRecords() {
+    yishuHuanfuRecords.value = []
+    yishuHuanfuRecordsLoading.value = false
+    yishuHuanfuRecordsNote.value = ''
+    yishuHuanfuRecordsLoaded.value = false
+    yishuHuanfuRecordsAccountId.value = ''
+  }
+
+  // 刷新本人铺子的今日行情（cmd 92）。旧实现打的是 cmd 95，而 95 其实是收购记录列表，
+  // 回包不带行情字段，所以这个按钮以前点了没反应。
+  function refreshYishuHuanfuQuote(accountId: string) {
+    return mutate('refreshYishuHuanfuQuote', '/yishuhuanfu/quote/refresh', accountId)
+  }
+
+  // 兑换下单：index 是目录序号，count 是数量。
+  function exchangeYishuHuanfuGoods(accountId: string, index: number, count = 1) {
+    return mutate('exchangeYishuHuanfuGoods', '/yishuhuanfu/exchange', accountId, { index, count })
+  }
+
+  // 目录是独立命令，进入活动页时单独拉一次，并把结果并回当前快照。
+  // 每次都真打一次 cmd 97：价格与剩余次数会随当日行情变，缓存住反而展示旧价。
+  async function loadYishuHuanfuCatalog(accountId: string) {
+    const requestedAccountId = String(accountId || '').trim()
+    if (!requestedAccountId)
+      return false
+    try {
+      const response = await api.get('/api/activity-center/yishuhuanfu/catalog', {
+        headers: { 'x-account-id': requestedAccountId },
+        skipErrorToast: true,
+      } as any)
+      const payload = record(responsePayload(response.data))
+      const current = record(snapshot.value)
+      const detail = record(current.yishuHuanfu)
+      if (Object.keys(detail).length === 0)
+        return false
+      const catalog = records(payload.catalog).map(entry => ({
+        index: finiteNumber(first(entry.index)) || 0,
+        itemId: entry.itemId === null || entry.itemId === undefined ? null : text(entry.itemId),
+        name: text(entry.name),
+        nameKnown: bool(entry.nameKnown, entry.name_known),
+        price: text(entry.price),
+        status: finiteNumber(first(entry.status)) || 0,
+        limit: text(entry.limit),
+        exchangedToday: text(entry.exchangedToday, entry.exchanged_today),
+        image: text(entry.image),
+        exchangeable: bool(entry.exchangeable),
+      }))
+      const actions = record(detail.actions)
+      const exchangeEnabled = catalog.length > 0 && bool(first(detail.active))
+      applySnapshot({
+        ...current,
+        yishuHuanfu: {
+          ...detail,
+          catalog,
+          catalogLoaded: true,
+          actions: {
+            ...actions,
+            exchange: {
+              ...record(actions.exchange),
+              enabled: exchangeEnabled,
+              available: exchangeEnabled,
+              availabilityKnown: true,
+            },
+          },
+        },
+      })
+      return true
+    } catch {
+      return false
+    }
+  }
+
   function giftQixiSachet(accountId: string, friendGid: string, messageTextId = 15) {
     return mutate('giftQixiSachet', '/qixi/gift', accountId, { friendGid, messageTextId })
+  }
+
+  // 把自己铺子的剩余接收额度（cmd 92）并回快照，供进度条展示。
+  async function loadYishuHuanfuShop(accountId: string) {
+    const requestedAccountId = String(accountId || '').trim()
+    if (!requestedAccountId)
+      return false
+    try {
+      const response = await api.get('/api/activity-center/yishuhuanfu/shop', {
+        headers: { 'x-account-id': requestedAccountId },
+        skipErrorToast: true,
+      } as any)
+      const payload = record(responsePayload(response.data))
+      const current = record(snapshot.value)
+      const detail = record(current.yishuHuanfu)
+      if (Object.keys(detail).length === 0)
+        return false
+      const quota = payload.quota === null || payload.quota === undefined ? null : text(payload.quota)
+      if (quota === null)
+        return false
+      const shop = record(detail.shop)
+      applySnapshot({
+        ...current,
+        yishuHuanfu: {
+          ...detail,
+          shop: {
+            ...shop,
+            quota,
+            quotaCap: text(payload.quotaCap, payload.quota_cap, text(shop.quotaCap)),
+            quotaUsed: payload.quotaUsed === null || payload.quotaUsed === undefined
+              ? null
+              : text(payload.quotaUsed),
+          },
+        },
+      })
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * 好友铺子比价：把好友列表逐个丢给 cmd 92 查今日收购价。
+   * force 为真时跳过后端 3 分钟缓存，用于手动刷新。
+   */
+  async function scanYishuHuanfuFriendShops(accountId: string, force = false) {
+    const requestedAccountId = String(accountId || '').trim()
+    if (!requestedAccountId || yishuHuanfuFriendShopsLoading.value)
+      return false
+    // 换账号先清空上一个账号的比价结果（同步执行，界面上不会闪别人的好友）。
+    if (yishuHuanfuFriendShopsAccountId.value !== requestedAccountId)
+      clearYishuHuanfuFriendShops()
+    yishuHuanfuFriendShopsAccountId.value = requestedAccountId
+    yishuHuanfuFriendShopsLoading.value = true
+    try {
+      const response = await api.get('/api/activity-center/yishuhuanfu/friends', {
+        headers: { 'x-account-id': requestedAccountId },
+        params: force ? { force: 1 } : {},
+        skipErrorToast: true,
+      } as any)
+      const payload = record(responsePayload(response.data))
+      // 扫描期间切了账号：这份结果属于上一个账号，丢掉。
+      if (yishuHuanfuFriendShopsAccountId.value !== requestedAccountId)
+        return false
+      yishuHuanfuFriendShops.value = records(payload.shops).map((entry) => {
+        const price = text(entry.price)
+        const bonus = text(entry.bonus)
+        // 后端会给 totalPrice；老版本后端没有时按基础价 + 加成兜底，别退回只显示基础价。
+        const totalPrice = text(entry.totalPrice, entry.total_price)
+          || String(Number(price || '0') + Number(bonus || '0'))
+        return {
+          gid: text(entry.gid),
+          name: text(entry.name),
+          avatar: text(entry.avatar),
+          level: text(entry.level),
+          own: bool(entry.own),
+          price,
+          bonus,
+          totalPrice,
+          quota: text(entry.quota),
+          quotaCap: text(entry.quotaCap, entry.quota_cap),
+          quotaUsed: text(entry.quotaUsed, entry.quota_used),
+          // can_sell 是三态：缺字段时保持 null（按可卖处理），只有明确 false 才禁卖。
+          canSell: entry.canSell === undefined || entry.canSell === null
+            ? null
+            : bool(entry.canSell, entry.can_sell),
+          // 自家铺子不占好友额度，界面固定显示「不限」。
+          unlimited: bool(entry.unlimited) || bool(entry.own),
+        }
+      })
+      yishuHuanfuFriendScanAt.value = finiteNumber(first(payload.scannedAt, payload.scanned_at)) || Date.now()
+      const scanned = finiteNumber(first(payload.scanned)) || 0
+      const failed = finiteNumber(first(payload.failed)) || 0
+      const friendListError = text(payload.friendListError, payload.friend_list_error)
+      yishuHuanfuFriendScanNote.value = friendListError
+        || (scanned === 0
+          ? '没有可查询的好友铺子'
+          : `已扫描 ${yishuHuanfuFriendShops.value.length} 个铺子${failed ? `，${failed} 个查询失败` : ''}`)
+      return true
+    } catch (scanError) {
+      if (yishuHuanfuFriendShopsAccountId.value === requestedAccountId)
+        yishuHuanfuFriendScanNote.value = errorMessage(scanError, '好友铺子比价失败')
+      return false
+    } finally {
+      if (yishuHuanfuFriendShopsAccountId.value === requestedAccountId)
+        yishuHuanfuFriendShopsLoading.value = false
+    }
+  }
+
+  function clearYishuHuanfuFriendShops() {
+    yishuHuanfuFriendShops.value = []
+    yishuHuanfuFriendShopsLoading.value = false
+    yishuHuanfuFriendScanAt.value = 0
+    yishuHuanfuFriendScanNote.value = ''
+    yishuHuanfuFriendShopsAccountId.value = ''
   }
 
   function claimQingMeiDailySeed(accountId: string) {
@@ -2457,455 +2783,6 @@ export const useActivityCenterStore = defineStore('activity-center', () => {
     return load(accountId, true)
   }
 
-  // ---------------- 以薯换福 ----------------
-  //
-  // 后端这条链路的 DTO 与其它活动不同：详情是扁平结构、写操作回包直接带一份最新的
-  // `activity` 快照。所以这里不复用通用 `mutate`，而是自己维护 pendingActions 与
-  // requestVersion，换来「一处理字段映射、一处续接目录/额度」的清晰边界。
-
-  function sweetPotatoIconsOf(raw: ActivityRecord) {
-    const icons = record(raw.icons)
-    return {
-      seed: text(icons.seed),
-      sweetPotato: text(icons.sweetPotato, icons.sweet_potato),
-      luckCoin: text(icons.luckCoin, icons.luck_coin),
-    }
-  }
-
-  /** 详情刷新时把「不在快照里、但已经查过」的两块续上：兑换目录与本人铺子额度。 */
-  function carryOverSweetPotatoExtras(detail: SweetPotatoActivityDto, previous: SweetPotatoActivityDto | null) {
-    if (!previous || previous.activityId !== detail.activityId)
-      return detail
-    if (previous.catalogLoaded) {
-      detail.catalog = previous.catalog
-      detail.catalogLoaded = true
-    }
-    if (previous.shop.quota !== null) {
-      detail.shop.quota = previous.shop.quota
-      detail.shop.quotaUsed = previous.shop.quotaUsed
-      // 每日上限只在 cmd 92 回包里，刷新详情时必须一起续上，否则进度条分母退回空值。
-      detail.shop.quotaCap = previous.shop.quotaCap
-    }
-    return detail
-  }
-
-  async function loadSweetPotatoDetail(accountId: string, options: { silent?: boolean } = {}) {
-    const requestedAccountId = String(accountId || '').trim()
-    if (!requestedAccountId)
-      return false
-    const version = ++requestVersion.value
-    if (!options.silent)
-      sweetPotatoDetailLoading.value = true
-    try {
-      const response = await api.get('/api/activity-center/sweet-potato', {
-        headers: { 'x-account-id': requestedAccountId },
-        skipErrorToast: true,
-      } as any)
-      if (!isCurrent(version, requestedAccountId))
-        return false
-      const raw = record(responsePayload(response.data))
-      const detail = normalizeSweetPotatoActivity(raw, sweetPotatoIconsOf(raw))
-      if (!detail) {
-        error.value = '活动数据格式异常，请刷新重试'
-        return false
-      }
-      sweetPotatoDetail.value = carryOverSweetPotatoExtras(detail, sweetPotatoDetail.value)
-      return true
-    }
-    catch (detailError) {
-      if (isCurrent(version, requestedAccountId))
-        error.value = errorMessage(detailError, '以薯换福数据加载失败')
-      return false
-    }
-    finally {
-      if (requestVersion.value === version)
-        sweetPotatoDetailLoading.value = false
-    }
-  }
-
-  /** 兑换目录（cmd 97），不在详情快照里，进页面与点刷新时单独拉一次。 */
-  async function loadSweetPotatoCatalog(accountId: string) {
-    const requestedAccountId = String(accountId || '').trim()
-    if (!requestedAccountId)
-      return false
-    const version = ++requestVersion.value
-    try {
-      const response = await api.get('/api/activity-center/sweet-potato/shop-catalog', {
-        headers: { 'x-account-id': requestedAccountId },
-        skipErrorToast: true,
-      } as any)
-      if (!isCurrent(version, requestedAccountId))
-        return false
-      const result = record(responsePayload(response.data))
-      const current = sweetPotatoDetail.value
-      if (!current)
-        return false
-      const goods = records(result.goods).map(entry => ({
-        index: finiteNumber(first(entry.index)) || 0,
-        itemId: entry.itemId === null || entry.itemId === undefined ? null : text(entry.itemId),
-        name: text(entry.name),
-        nameKnown: bool(entry.nameKnown, entry.name_known),
-        price: text(entry.price, '0'),
-        status: finiteNumber(first(entry.status)) || 0,
-        limit: text(entry.limit, '0'),
-        exchangedToday: text(entry.exchangedToday, entry.exchanged_today, '0'),
-        image: text(entry.image),
-        // 目录骨架里没有 exchangeable 时按可兑处理，价格够不够由渲染层再判一次。
-        exchangeable: entry.exchangeable === null || entry.exchangeable === undefined
-          ? true
-          : bool(entry.exchangeable),
-      }))
-      sweetPotatoDetail.value = { ...current, catalog: goods, catalogLoaded: true }
-      if (!goods.length)
-        notice.value = text(result.message) || '本期兑换目录为空'
-      return true
-    }
-    catch (catalogError) {
-      if (isCurrent(version, requestedAccountId))
-        error.value = errorMessage(catalogError, '兑换目录加载失败')
-      return false
-    }
-  }
-
-  /**
-   * 本人铺子的今日行情（cmd 92，只读）。
-   *
-   * 详情快照只有基础价与暴击，剩余接收额度必须现查；这个入口同时承担
-   * 「进页面补额度」与「手动刷新行情」两个用途。
-   */
-  /**
-   * 把 cmd 92 的回包写进详情与比价表：行情、暴击加成、剩余接收额度一起更新。
-   *
-   * 抽出来是为了让「刷新行情」和「静默查额度」共用同一套落盘规则，
-   * 否则两处各写一遍迟早写出不一致（尤其是额度与已用的换算）。
-   */
-  function applyShopQuote(result: ActivityRecord, current: SweetPotatoActivityDto) {
-    const shop = record(result.shop)
-    const quota = result.quota === null || result.quota === undefined ? null : text(result.quota)
-    const quotaCap = text(shop.dailyQuota, current.shop.quotaCap)
-    sweetPotatoDetail.value = {
-      ...current,
-      shop: {
-        ...current.shop,
-        price: text(shop.basePrice, current.shop.price),
-        bonus: text(shop.bonusPrice, current.shop.bonus),
-        estimatedPrice: result.price === undefined ? current.shop.estimatedPrice : text(result.price),
-        priceKnown: result.priceKnown === undefined ? current.shop.priceKnown : bool(result.priceKnown),
-        quota,
-        quotaCap,
-        quotaUsed: quota === null
-          ? null
-          : String(Math.max(0, Number(quotaCap || 0) - Number(quota || 0))),
-      },
-    }
-    // 比价表里自己那一行同步更新，免得两个地方显示的价格对不上。
-    const ownIndex = sweetPotatoFriendShops.value.findIndex(entry => entry.own)
-    if (ownIndex >= 0) {
-      const next = [...sweetPotatoFriendShops.value]
-      const own = next[ownIndex]
-      next[ownIndex] = {
-        ...own,
-        price: text(shop.basePrice, own.price),
-        bonus: text(shop.bonusPrice, own.bonus),
-        totalPrice: result.price === undefined ? own.totalPrice : text(result.price),
-        quota: text(result.quota, own.quota),
-        quotaCap,
-      }
-      sweetPotatoFriendShops.value = next
-    }
-  }
-
-  /**
-   * 刷新本人行情（cmd 92 只读），顺带拿到剩余接收额度。
-   *
-   * 页面上的「刷新行情」按钮走这里：打 pending 标记并给出提示。
-   * 只想静默补额度（进页面自动补齐）用 `loadSweetPotatoShop`。
-   */
-  async function refreshSweetPotatoQuote(accountId: string) {
-    const requestedAccountId = String(accountId || '').trim()
-    if (!requestedAccountId || pendingActions.value.refreshSweetPotatoQuote)
-      return false
-    const version = ++requestVersion.value
-    pendingActions.value.refreshSweetPotatoQuote = true
-    actionError.value = ''
-    notice.value = ''
-    try {
-      const response = await api.post('/api/activity-center/sweet-potato/quote/refresh', {}, {
-        headers: { 'x-account-id': requestedAccountId },
-        skipErrorToast: true,
-      } as any)
-      if (!isCurrent(version, requestedAccountId))
-        return false
-      const result = record(responsePayload(response.data))
-      const current = sweetPotatoDetail.value
-      if (current)
-        applyShopQuote(result, current)
-      notice.value = text(result.message) || '行情已刷新'
-      return true
-    }
-    catch (quoteError) {
-      if (isCurrent(version, requestedAccountId))
-        actionError.value = errorMessage(quoteError, '刷新行情失败')
-      return false
-    }
-    finally {
-      pendingActions.value.refreshSweetPotatoQuote = false
-    }
-  }
-
-  /**
-   * 查本人铺子剩余接收额度（cmd 92），只回填额度与行情。
-   *
-   * 与 li 版的 `loadYishuHuanfuShop` 同语义：不参与 requestVersion 竞争、不设 pending、
-   * 不动提示文案。所以它可以和兑换目录并行发——两边都递增全局版本号的话，
-   * 先回的那个会被判成过期，目录就落不了地（面板上「兑换商店」会一直空着）。
-   */
-  async function loadSweetPotatoShop(accountId: string) {
-    const requestedAccountId = String(accountId || '').trim()
-    if (!requestedAccountId)
-      return false
-    try {
-      const response = await api.post('/api/activity-center/sweet-potato/quote/refresh', {}, {
-        headers: { 'x-account-id': requestedAccountId },
-        skipErrorToast: true,
-      } as any)
-      // 只比账号：换了账号就丢掉这份回包，但不影响任何进行中的请求。
-      if (!isCurrentAccount(requestedAccountId))
-        return false
-      const current = sweetPotatoDetail.value
-      if (!current)
-        return false
-      applyShopQuote(record(responsePayload(response.data)), current)
-      return true
-    }
-    catch {
-      return false
-    }
-  }
-
-  /**
-   * 以薯换福的写操作统一入口：pendingActions 去重 + requestVersion 独占。
-   *
-   * 回包里的 `activity` 是后端刚回填的真值（写完会重读背包），直接用它替换详情，
-   * 比再发一次详情请求更快也更准；回包没带时才退回重新拉取。
-   */
-  async function runSweetPotatoAction(
-    key: ActivityMutationKey,
-    path: string,
-    accountId: string,
-    payload: ActivityRecord = {},
-    options: { reloadCatalog?: boolean } = {},
-  ) {
-    const requestedAccountId = String(accountId || '').trim()
-    if (!requestedAccountId || pendingActions.value[key])
-      return false
-    const version = ++requestVersion.value
-    pendingActions.value[key] = true
-    actionError.value = ''
-    notice.value = ''
-    try {
-      const response = await api.post(`/api/activity-center/sweet-potato/${path}`, payload, {
-        headers: { 'x-account-id': requestedAccountId },
-        skipErrorToast: true,
-      } as any)
-      if (!isCurrent(version, requestedAccountId))
-        return false
-      const result = record(responsePayload(response.data))
-      const message = text(result.message) || '操作完成'
-      // 分享上报（ReportShare）才是暴击真正落地的那一步：上报没确认时分享本身算成功，
-      // 但必须把原因写在提示里，不能让用户以为价格已经涨了。
-      notice.value = path === 'share' && result.shareReported === false
-        ? `${message}（分享上报未确认：${text(result.shareReportError) || '原因未知'}）`
-        : message
-      const activity = record(result.activity)
-      if (Object.keys(activity).length > 0) {
-        const detail = normalizeSweetPotatoActivity(activity, sweetPotatoIconsOf(activity))
-        if (detail)
-          sweetPotatoDetail.value = carryOverSweetPotatoExtras(detail, sweetPotatoDetail.value)
-      }
-      else {
-        await loadSweetPotatoDetail(requestedAccountId, { silent: true })
-      }
-      if (result.refreshRequired)
-        await loadSweetPotatoDetail(requestedAccountId, { silent: true })
-      if (options.reloadCatalog)
-        await loadSweetPotatoCatalog(requestedAccountId)
-      return true
-    }
-    catch (actionFailure) {
-      if (isCurrent(version, requestedAccountId))
-        actionError.value = errorMessage(actionFailure, '操作失败，请稍后重试')
-      return false
-    }
-    finally {
-      pendingActions.value[key] = false
-    }
-  }
-
-  function claimSweetPotatoSeeds(accountId: string) {
-    return runSweetPotatoAction('claimSweetPotatoSeed', 'claim', accountId)
-  }
-
-  /**
-   * 出售蜜薯。
-   *
-   * `friendGid` 为空表示卖给自己：后端靠 `hostGid === undefined` 判定自家铺子，
-   * 传空串会被当成无效 GID 打回，所以这里必须整个字段省掉。
-   * 卖好友时必须带 `expectedPrice`：后端拿它和现查价格比对，价格变了直接拒绝，
-   * 避免按旧价成交。`requestId` 用来兜住重复点击与网络重试，同一轮只卖一次。
-   */
-  async function sellSweetPotato(accountId: string, friendGid = '', count: number | null = null, expectedPrice: number | null = null) {
-    const target = String(friendGid || '').trim()
-    const payload: ActivityRecord = {
-      ...(target ? { hostGid: target, expectedPrice } : {}),
-      ...(count === null || count === undefined ? {} : { count }),
-      // 幂等标识：面板重复点击 / 网络重试都复用同一次出售，避免卖两遍。
-      requestId: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
-    }
-    const ok = await runSweetPotatoAction('sellSweetPotato', 'sell', accountId, payload)
-    if (ok) {
-      // 卖完自家额度会变，顺手刷一次；失败也刷，避免额度显示落后。
-      await refreshSweetPotatoQuote(accountId)
-      if (target)
-        await scanSweetPotatoFriendShops(accountId, true)
-    }
-    return ok
-  }
-
-  function shareSweetPotatoShop(accountId: string) {
-    return runSweetPotatoAction('shareSweetPotatoShop', 'share', accountId)
-  }
-
-  function exchangeSweetPotatoGoods(accountId: string, index: number, count = 1) {
-    return runSweetPotatoAction('exchangeSweetPotatoGoods', 'exchange', accountId, { index, count }, { reloadCatalog: true })
-  }
-
-  function claimSweetPotatoCommission(accountId: string) {
-    return runSweetPotatoAction('claimSweetPotatoCommission', 'commission', accountId)
-  }
-
-  /** 收购记录（cmd 95），不进快照，进页面拉一次；领完提成、卖完薯都重新拉。 */
-  async function loadSweetPotatoRecords(accountId: string, force = false) {
-    const requestedAccountId = String(accountId || '').trim()
-    if (!requestedAccountId)
-      return false
-    if (sweetPotatoRecordsAccountId.value !== requestedAccountId)
-      clearSweetPotatoRecords()
-    sweetPotatoRecordsAccountId.value = requestedAccountId
-    if (sweetPotatoRecordsLoading.value)
-      return false
-    if (!force && sweetPotatoRecordsLoaded.value)
-      return true
-    sweetPotatoRecordsLoading.value = true
-    try {
-      const response = await api.get('/api/activity-center/sweet-potato/records', {
-        headers: { 'x-account-id': requestedAccountId },
-        skipErrorToast: true,
-      } as any)
-      if (sweetPotatoRecordsAccountId.value !== requestedAccountId)
-        return false
-      const payload = record(responsePayload(response.data))
-      sweetPotatoRecords.value = records(payload.records).map(entry => ({
-        // 后端给的是毫秒，面板按秒算「N 分钟前」，这里统一换算。
-        timestamp: String(Math.floor(Number(first(entry.timestamp, 0)) / 1000) || 0),
-        gid: text(entry.gid),
-        count: text(entry.count, '0'),
-        total: text(entry.total, '0'),
-        name: text(entry.name),
-        avatar: text(entry.avatar, entry.avatarUrl, entry.avatar_url),
-        level: text(entry.level),
-        commission: text(entry.commission, '0'),
-      }))
-      sweetPotatoRecordsNote.value = text(payload.message)
-      sweetPotatoRecordsLoaded.value = true
-      return true
-    }
-    catch (recordsError) {
-      if (sweetPotatoRecordsAccountId.value === requestedAccountId)
-        sweetPotatoRecordsNote.value = errorMessage(recordsError, '收购记录加载失败')
-      return false
-    }
-    finally {
-      if (sweetPotatoRecordsAccountId.value === requestedAccountId)
-        sweetPotatoRecordsLoading.value = false
-    }
-  }
-
-  function clearSweetPotatoRecords() {
-    sweetPotatoRecords.value = []
-    sweetPotatoRecordsLoading.value = false
-    sweetPotatoRecordsNote.value = ''
-    sweetPotatoRecordsLoaded.value = false
-    sweetPotatoRecordsAccountId.value = ''
-  }
-
-  /** 好友铺子比价（cmd 92 × N，只读）：服务端有 3 分钟缓存，force 才强制重扫。 */
-  async function scanSweetPotatoFriendShops(accountId: string, force = false) {
-    const requestedAccountId = String(accountId || '').trim()
-    if (!requestedAccountId || sweetPotatoFriendShopsLoading.value)
-      return false
-    if (sweetPotatoFriendShopsAccountId.value !== requestedAccountId)
-      clearSweetPotatoFriendShops()
-    sweetPotatoFriendShopsAccountId.value = requestedAccountId
-    sweetPotatoFriendShopsLoading.value = true
-    try {
-      const response = await api.get(`/api/activity-center/sweet-potato/scan?force=${force ? 1 : 0}`, {
-        headers: { 'x-account-id': requestedAccountId },
-        skipErrorToast: true,
-      } as any)
-      if (sweetPotatoFriendShopsAccountId.value !== requestedAccountId)
-        return false
-      const payload = record(responsePayload(response.data))
-      sweetPotatoFriendShops.value = records(payload.shops).map((entry) => {
-        const unlimited = bool(entry.unlimited)
-        const quotaCap = text(entry.dailyQuota, entry.daily_quota, '0')
-        const remainingKnown = entry.remaining !== null && entry.remaining !== undefined
-        const quota = text(entry.remaining, entry.quota, '0')
-        return {
-          gid: text(entry.hostGid, entry.gid),
-          name: text(entry.name),
-          avatar: text(entry.avatar, entry.avatarUrl, entry.avatar_url),
-          level: '',
-          own: unlimited,
-          price: text(entry.basePrice, entry.price, '0'),
-          bonus: text(entry.bonusPrice, entry.bonus, '0'),
-          totalPrice: text(entry.price, entry.totalPrice, '0'),
-          quota,
-          quotaCap,
-          quotaUsed: remainingKnown ? String(Math.max(0, Number(quotaCap || 0) - Number(quota || 0))) : '',
-          canSell: entry.canSell === null || entry.canSell === undefined ? null : bool(entry.canSell),
-          unlimited,
-          available: entry.available === undefined ? true : bool(entry.available),
-          error: text(entry.error),
-        }
-      })
-      sweetPotatoFriendScanAt.value = finiteNumber(first(payload.scannedAt, payload.scanned_at)) || Date.now()
-      const failed = Number(payload.failed || 0)
-      const message = text(payload.message)
-      sweetPotatoFriendScanNote.value = bool(payload.cached)
-        ? `${message}（3 分钟内的缓存结果，点「重新比价」强制重扫）`
-        : `${message}${failed > 0 ? `，${failed} 个查询失败` : ''}`
-      return true
-    }
-    catch (scanError) {
-      if (sweetPotatoFriendShopsAccountId.value === requestedAccountId)
-        sweetPotatoFriendScanNote.value = errorMessage(scanError, '好友铺子比价失败')
-      return false
-    }
-    finally {
-      if (sweetPotatoFriendShopsAccountId.value === requestedAccountId)
-        sweetPotatoFriendShopsLoading.value = false
-    }
-  }
-
-  function clearSweetPotatoFriendShops() {
-    sweetPotatoFriendShops.value = []
-    sweetPotatoFriendShopsLoading.value = false
-    sweetPotatoFriendScanAt.value = 0
-    sweetPotatoFriendScanNote.value = ''
-    sweetPotatoFriendShopsAccountId.value = ''
-  }
-
   return {
     snapshot,
     activities,
@@ -2916,9 +2793,13 @@ export const useActivityCenterStore = defineStore('activity-center', () => {
     constellation,
     qixi,
     qingMei,
+    yishuHuanfu,
+    yishuHuanfuFriendShops,
+    yishuHuanfuFriendShopsLoading,
+    yishuHuanfuFriendScanAt,
+    yishuHuanfuFriendScanNote,
     charity,
     weather,
-    sweetPotato,
     weatherFriends,
     weatherFriendsLoading,
     weatherFriendInspectingGid,
@@ -2942,6 +2823,21 @@ export const useActivityCenterStore = defineStore('activity-center', () => {
     exchangeStarSandGoods,
     claimQixiBridgeRewards,
     giftQixiSachet,
+    claimYishuHuanfuSeeds,
+    sellYishuHuanfuSweetPotato,
+    shareYishuHuanfuShop,
+    refreshYishuHuanfuQuote,
+    exchangeYishuHuanfuGoods,
+    loadYishuHuanfuCatalog,
+    loadYishuHuanfuShop,
+    loadYishuHuanfuRecords,
+    claimYishuHuanfuCommission,
+    yishuHuanfuRecords,
+    yishuHuanfuRecordsLoading,
+    yishuHuanfuRecordsNote,
+    clearYishuHuanfuRecords,
+    scanYishuHuanfuFriendShops,
+    clearYishuHuanfuFriendShops,
     claimQingMeiDailySeed,
     startQingMeiBrew,
     continueQingMeiBrew,
@@ -2955,28 +2851,6 @@ export const useActivityCenterStore = defineStore('activity-center', () => {
     inspectWeatherFriend,
     collectWeatherBottle,
     summonWeatherRain,
-    sweetPotatoDetail,
-    sweetPotatoDetailLoading,
-    sweetPotatoFriendShops,
-    sweetPotatoFriendShopsLoading,
-    sweetPotatoFriendScanAt,
-    sweetPotatoFriendScanNote,
-    sweetPotatoRecords,
-    sweetPotatoRecordsLoading,
-    sweetPotatoRecordsNote,
-    loadSweetPotatoDetail,
-    loadSweetPotatoCatalog,
-    loadSweetPotatoShop,
-    refreshSweetPotatoQuote,
-    claimSweetPotatoSeeds,
-    sellSweetPotato,
-    shareSweetPotatoShop,
-    exchangeSweetPotatoGoods,
-    claimSweetPotatoCommission,
-    loadSweetPotatoRecords,
-    clearSweetPotatoRecords,
-    scanSweetPotatoFriendShops,
-    clearSweetPotatoFriendShops,
     clearActionMessages,
     reset,
   }

@@ -1,12 +1,20 @@
 {
   "major": 3,
   "minor": 39,
-  "patch": 6,
-  "build": 272,
-  "version": "3.39.6",
-  "updatedAt": "2026-11-25T19:00:51.143Z",
+  "patch": 7,
+  "build": 273,
+  "version": "3.39.7",
+  "updatedAt": "2026-11-25T19:27:28.558Z",
   "lastCommit": "—",
   "history": [
+    {
+      "version": "3.39.7",
+      "build": 273,
+      "date": "2026-11-26",
+      "summary": "常规更新",
+      "commit": "—",
+      "type": "patch"
+    },
     {
       "version": "3.39.6",
       "build": 272,

@@ -9,7 +9,6 @@ const { createConfigStorage } = require('./config-storage');
 const { storageError } = require('../../services/json-db');
 const { parseHourOfDay } = require('../../utils/hour-of-day');
 const { RANCH_AUTOMATION_DEFAULTS, normalizeRanchSetting, migrateRanchMarketAutomation } = require('../../config/ranch-automation');
-const { SWEET_POTATO_DEFAULTS } = require('../../config/sweet-potato');
 
 const STORE_FILE: string = getDataFile('store.json');
 const ACCOUNTS_FILE: string = getDataFile('accounts.json');
@@ -75,7 +74,16 @@ function normalizeCapitalMode(value: unknown, fallback: CapitalModeConfig = DEFA
 const DEFAULT_ACCOUNT_CONFIG: AccountConfig = {
     automation: {
         ...RANCH_AUTOMATION_DEFAULTS,
-        ...SWEET_POTATO_DEFAULTS,
+        // 默认只做「领种子 + 分享」这两件零风险的事；自动卖薯要动别人的铺子额度，
+        // 默认也开，但好友都收满时默认兜底卖给自己，避免一批蜜薯烂在背包里。
+        yishu_claim_seed: true,
+        yishu_share: true,
+        yishu_auto_sell: true,
+        yishu_claim_commission: true,
+        yishu_sell_fallback_own: true,
+        yishu_scan_friend_limit: 20,
+        yishu_scan_interval_minutes: 30,
+        yishu_sell_min_count: 1,
         farm: true,
         farm_harvest_tiangong: true,
         farm_push: true,
@@ -454,18 +462,18 @@ function normalizeIntervals(intervals: Partial<IntervalConfig> | undefined): Int
 
 /**
  * 以薯换福的可调数值项与安全区间，必须与
- * `services/activity-center/sweet-potato.ts` 里的 sellConfig() 保持一致。
+ * `services/yishuhuanfu-auto.ts` 里的 toInt() 保持一致。
  *
  * 这几项默认值是**数字**，前端可能传字符串甚至布尔：不显式夹取的话，
  * 「每轮扫几家」退化成 1，或者 5~720 分钟的比价间隔变成 0（等于每轮都全量扫好友）。
  */
-const SWEET_POTATO_NUMERIC_RANGES: Record<string, [number, number]> = {
-    sweet_potato_scan_friend_limit: [1, 100],
-    sweet_potato_scan_interval_minutes: [5, 720],
-    sweet_potato_sell_min_count: [1, 9999],
+const YISHU_NUMERIC_RANGES: Record<string, [number, number]> = {
+    yishu_scan_friend_limit: [1, 50],
+    yishu_scan_interval_minutes: [5, 720],
+    yishu_sell_min_count: [1, 10000],
 };
 
-function clampSweetPotatoNumber(value: unknown, range: [number, number]): number {
+function clampYishuNumber(value: unknown, range: [number, number]): number {
     const parsed = Number.parseInt(String(value), 10);
     if (!Number.isFinite(parsed)) return range[0];
     return Math.max(range[0], Math.min(range[1], parsed));
@@ -481,10 +489,10 @@ function cloneAccountConfig(base: Partial<AccountConfig> = DEFAULT_ACCOUNT_CONFI
             automation[key] = normalizeFertilizerLandTypes(srcAutomation[key], DEFAULT_FERTILIZER_LAND_TYPES);
             continue;
         }
-        const sweetPotatoRange = SWEET_POTATO_NUMERIC_RANGES[key as string];
-        if (sweetPotatoRange) {
+        const yishuRange = YISHU_NUMERIC_RANGES[key as string];
+        if (yishuRange) {
             if (srcAutomation[key] !== undefined) {
-                (automation as any)[key] = clampSweetPotatoNumber(srcAutomation[key], sweetPotatoRange);
+                (automation as any)[key] = clampYishuNumber(srcAutomation[key], yishuRange);
             }
             continue;
         }

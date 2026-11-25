@@ -75,7 +75,6 @@ const WINDOW_IDS = {
     rainPoem: ['2026070300'],
     milkTea: ['2026110100', '2026110101', '2026110102', '2026110103'],
     shareReward: ['2026092500', '2026092501', '2026110104'],
-    sweetPotato: ['2026111707', '2026111708', '2026111709'],
 };
 
 interface AutomationOp {
@@ -832,42 +831,6 @@ function buildOps(): AutomationOp[] {
             },
         },
         ...buildMilkTeaOps(),
-        {
-            key: 'sweet_potato_claim',
-            label: '以薯换福-领取每日红薯种子',
-            activityIds: WINDOW_IDS.sweetPotato,
-            run: async () => activityCenter.sweetPotatoAutoClaim(),
-        },
-        {
-            key: 'sweet_potato_share',
-            label: '以薯换福-分享暴击',
-            activityIds: WINDOW_IDS.sweetPotato,
-            run: async () => activityCenter.sweetPotatoAutoShare(),
-        },
-        {
-            key: 'sweet_potato_plant',
-            label: '以薯换福-红薯种植与收获',
-            activityIds: WINDOW_IDS.sweetPotato,
-            // 作物 12 小时成熟，5 分钟一轮足够；收完补种也不需要更密。
-            run: async (automation) => {
-                // 农场自动化开启时由巡田的「活动优先种红薯」负责，避免两处同时种地打架。
-                if (automation.farm) return false;
-                const changed = await activityCenter.sweetPotatoRunCropCycle();
-                return changed > 0;
-            },
-        },
-        {
-            key: 'sweet_potato_sell',
-            label: '以薯换福-出售蜜薯',
-            activityIds: WINDOW_IDS.sweetPotato,
-            run: async () => activityCenter.sweetPotatoAutoSell(),
-        },
-        {
-            key: 'sweet_potato_commission',
-            label: '以薯换福-领取收购提成',
-            activityIds: WINDOW_IDS.sweetPotato,
-            run: async () => activityCenter.sweetPotatoAutoClaimCommission(),
-        },
     ];
 }
 

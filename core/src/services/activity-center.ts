@@ -19,7 +19,7 @@ const { createCharityActivityService } = require('./activity-center/charity');
 const { createQixiActivityService } = require('./activity-center/qixi');
 const { createQingMeiActivityService } = require('./activity-center/qingmei');
 const { createPetDiaryService } = require('./activity-center/pet-diary');
-const { createSweetPotatoService } = require('./activity-center/sweet-potato');
+const { createYishuHuanfuActivityService } = require('./activity-center/yishuhuanfu');
 const {
     createEmptyCharityRedFlowerState,
     loadCharityRedFlowerState,
@@ -379,8 +379,8 @@ async function settleRequest(operation: () => Promise<any>): Promise<SettledEntr
     }
 }
 
-function buildActivityDirectory(windows: any[], season: any, shop: any, solarTerms: any, constellation: any, qixi: any = null, weather: any = null, qingMei: any = null, charity: any = null) {
-    const gameplayBindings = buildActivityGameplayBindings({ season, shop, solarTerms, constellation, qixi, weather, qingMei, charity });
+function buildActivityDirectory(windows: any[], season: any, shop: any, solarTerms: any, constellation: any, qixi: any = null, weather: any = null, qingMei: any = null, charity: any = null, yishuHuanfu: any = null) {
+    const gameplayBindings = buildActivityGameplayBindings({ season, shop, solarTerms, constellation, qixi, weather, qingMei, charity, yishuHuanfu });
     const groups: any[] = [];
     for (const window of windows) {
         const id = String(window?.id || '').trim();
@@ -420,22 +420,6 @@ function buildActivityDirectory(windows: any[], season: any, shop: any, solarTer
     }));
 }
 
-// 快照函数在下面几行就要用到它，实例化必须放在快照函数之前（依赖全是函数声明，可安全前移）。
-const sweetPotatoService = createSweetPotatoService({
-    types, sendMsgAsync, getBag, getBagItems, getServerTimeSec, itemDto,
-    int64String, int64Number, businessError, positiveDecimal,
-    serializeMutation, getActivityCenterSnapshot,
-    // 显式注入，别让 selfGid() 走懒加载 require —— 那层路径在子目录里极易写错，
-    // 而且一旦写错只会在调用时才抛 MODULE_NOT_FOUND，主流程很难提前发现。
-    getUserState,
-    // 补种/巡田的三个 farm 依赖同样显式注入。同类事故已经踩过两次（selfGid、friendsOf），
-    // 这里用 getter 惰性 require：farm/planting.ts 里又有对 activity-center 的反向懒加载，
-    // 顶层立即 require 会把加载顺序绑死，getter 只在实际补种时才触发。
-    get plantSeeds() { return require('./farm/planting').plantSeeds; },
-    get farm() { return require('./farm/api'); },
-    get analyzeLands() { return require('./farm/land-analysis').analyzeLands; },
-});
-
 async function buildActivityCenterSnapshot(shopOverride: any = null) {
     // 星座 type=21 是写操作，读取快照只能使用赛季发现信息和最近一次写操作回包。
     // Gateway calls are intentionally serial. The game connection can stop
@@ -447,7 +431,7 @@ async function buildActivityCenterSnapshot(shopOverride: any = null) {
     const qingMeiResult = await settleRequest(getCurrentQingMeiActivity);
     const charityResult = await settleRequest(getCurrentCharityRedFlowerActivity);
     const weatherResult = await settleRequest(weatherActivityService.getCurrentWeatherActivity);
-    const sweetPotatoResult = await settleRequest(() => sweetPotatoService.getSweetPotatoActivity(false));
+    const yishuHuanfuResult = await settleRequest(getCurrentYishuHuanfuActivity);
     const rawSeason = settledValue(seasonResult);
     const season = rawSeason ? normalizeSeason(rawSeason) : null;
     const solarTerms = solarResult.status === 'fulfilled' ? normalizeSolarTerms(solarResult.value) : null;
@@ -455,7 +439,7 @@ async function buildActivityCenterSnapshot(shopOverride: any = null) {
     const qingMei = settledValue(qingMeiResult);
     const charity = settledValue(charityResult);
     const weather = settledValue(weatherResult);
-    const sweetPotato = settledValue(sweetPotatoResult);
+    const yishuHuanfu = settledValue(yishuHuanfuResult);
 
     let shopResult: SettledEntry;
     if (shopOverride) {
@@ -480,7 +464,7 @@ async function buildActivityCenterSnapshot(shopOverride: any = null) {
     const activityWindows = settledValue(activityListResult) || [];
     return {
         serverTime: getServerTimeSec(),
-        activities: buildActivityDirectory(activityWindows, season, shop, solarTerms, constellation, qixi, weather, qingMei, charity),
+        activities: buildActivityDirectory(activityWindows, season, shop, solarTerms, constellation, qixi, weather, qingMei, charity, yishuHuanfu),
         season,
         constellation,
         shop,
@@ -489,7 +473,7 @@ async function buildActivityCenterSnapshot(shopOverride: any = null) {
         qingMei,
         charity,
         weather,
-        sweetPotato,
+        yishuHuanfu,
         capabilities: {
             claimPass: actions.claimPass.supported,
             lightConstellation: actions.lightConstellation.supported,
@@ -504,7 +488,7 @@ async function buildActivityCenterSnapshot(shopOverride: any = null) {
             charityDonateLove: !!charity,
             charityClaimDailyGift: !!charity,
             weatherResearch: !!weather,
-            sweetPotato: !!sweetPotato,
+            yishuHuanfu: !!yishuHuanfu,
         },
         actions,
         errors: {
@@ -515,7 +499,7 @@ async function buildActivityCenterSnapshot(shopOverride: any = null) {
             qingMei: settledError(qingMeiResult),
             charity: settledError(charityResult),
             weather: settledError(weatherResult),
-            sweetPotato: settledError(sweetPotatoResult),
+            yishuHuanfu: settledError(yishuHuanfuResult),
             activities: settledError(activityListResult),
         },
     };
@@ -567,6 +551,31 @@ function serializeMutation<T>(operation: () => Promise<T>): Promise<T> {
     return result;
 }
 
+const yishuHuanfuService = createYishuHuanfuActivityService({
+    types,
+    sendMsgAsync,
+    getBag,
+    getSystemDateKey,
+    getServerTimeSec,
+    int64String,
+    int64Number,
+    bytesToText,
+    itemDto,
+    textContent,
+    businessError,
+    positiveDecimal,
+    activityWindowIsActive,
+    readBagBalances,
+    serializeMutation,
+    getActivityCenterSnapshot,
+    getUserState,
+});
+
+// 函数声明提升，供 buildActivityCenterSnapshot 在服务实例化之前引用。
+async function getCurrentYishuHuanfuActivity() {
+    return yishuHuanfuService.getCurrentYishuHuanfuActivity();
+}
+
 module.exports = {
     getPetDiary: petDiaryService.getPetDiary,
     operatePetDiary: petDiaryService.operatePetDiary,
@@ -612,20 +621,15 @@ module.exports = {
     donateCharityRedFlowerLove,
     claimCharityRedFlowerDailyGift,
     claimCharityRedFlowerProgressReward,
-    getSweetPotatoActivity: sweetPotatoService.getSweetPotatoActivity,
-    getSweetPotatoShopCatalog: sweetPotatoService.getSweetPotatoShopCatalog,
-    getSweetPotatoShops: sweetPotatoService.getSweetPotatoShops,
-    getSweetPotatoRecords: sweetPotatoService.getSweetPotatoRecords,
-    scanSweetPotatoShops: sweetPotatoService.scanShops,
-    refreshSweetPotatoQuote: sweetPotatoService.refreshSweetPotatoQuote,
-    operateSweetPotato: sweetPotatoService.operateSweetPotato,
-    exchangeSweetPotatoGoods: sweetPotatoService.exchangeSweetPotatoGoods,
-    sweetPotatoClaimCommission: sweetPotatoService.claimCommission,
-    sweetPotatoAutoClaim: sweetPotatoService.autoClaim,
-    sweetPotatoAutoShare: sweetPotatoService.autoShare,
-    sweetPotatoAutoSell: sweetPotatoService.autoSell,
-    sweetPotatoAutoClaimCommission: sweetPotatoService.autoClaimCommission,
-    sweetPotatoRunCropCycle: sweetPotatoService.runCropCycle,
-    sweetPotatoPlantEmptyLands: sweetPotatoService.plantEmptyLands,
-    sweetPotatoIsActive: sweetPotatoService.isSweetPotatoActive,
+    getCurrentYishuHuanfuActivity: yishuHuanfuService.getCurrentYishuHuanfuActivity,
+    claimYishuHuanfuSeeds: yishuHuanfuService.claimYishuHuanfuSeeds,
+    sellYishuHuanfuSweetPotato: yishuHuanfuService.sellYishuHuanfuSweetPotato,
+    refreshYishuHuanfuQuote: yishuHuanfuService.refreshYishuHuanfuQuote,
+    queryYishuHuanfuCatalog: yishuHuanfuService.queryYishuHuanfuCatalog,
+    queryYishuHuanfuRecords: yishuHuanfuService.queryYishuHuanfuRecords,
+    claimYishuHuanfuCommission: yishuHuanfuService.claimYishuHuanfuCommission,
+    queryYishuHuanfuShop: yishuHuanfuService.queryYishuHuanfuShop,
+    scanYishuHuanfuFriendShops: yishuHuanfuService.scanYishuHuanfuFriendShops,
+    exchangeYishuHuanfuGoods: yishuHuanfuService.exchangeYishuHuanfuGoods,
+    shareYishuHuanfuShop: yishuHuanfuService.shareYishuHuanfuShop,
 };

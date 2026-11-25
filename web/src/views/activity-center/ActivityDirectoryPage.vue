@@ -21,7 +21,7 @@ const emit = defineEmits<{
 const accountStore = useAccountStore()
 const activityStore = useActivityCenterStore()
 const { currentAccountId } = storeToRefs(accountStore)
-const { activities: farmActivities, season, shop, solarTerms, constellation, qixi, qingMei, charity, weather, sweetPotato, loading: farmLoading, error: farmError, loadedAccountId: farmLoadedAccountId, serverClockOffset: farmClockOffset } = storeToRefs(activityStore)
+const { activities: farmActivities, season, shop, solarTerms, constellation, qixi, qingMei, charity, weather, loading: farmLoading, error: farmError, loadedAccountId: farmLoadedAccountId, serverClockOffset: farmClockOffset } = storeToRefs(activityStore)
 const { serverNow: farmNow } = useActivityClock()
 const ranchDirectory = ref<ActivityDirectoryItemDto[]>([])
 const ranchLoading = ref(false)
@@ -76,18 +76,6 @@ const displayActivities = computed<ActivityDirectoryItemDto[]>(() => {
       gameplayKey: 'qixi',
       gameplayTargets: ['qixi'],
       detailTarget: 'qixi',
-    })
-  }
-  if (sweetPotato.value) {
-    appendDetailEntry({
-      id: sweetPotato.value.activityId,
-      activityIds: [sweetPotato.value.groupId, sweetPotato.value.activityId].filter(Boolean),
-      name: sweetPotato.value.title,
-      startTime: sweetPotato.value.startTime,
-      endTime: sweetPotato.value.endTime,
-      gameplayKey: 'sweetPotato',
-      gameplayTargets: ['sweetPotato'],
-      detailTarget: 'sweetPotato',
     })
   }
   if (qingMei.value) {
@@ -285,8 +273,7 @@ function activityDisplayName(activity: ActivityDirectoryItemDto) {
 function activityIconSrc(activity: ActivityDirectoryItemDto) {
   if (activity.gameplayKey === 'muge')
     return '/activity-assets/muge/icon.png'
-  // 以薯换福与详情页共用同一张图标，避免目录卡片和活动页头图形不一致。
-  if (activity.gameplayKey === 'sweetPotato')
+  if (activity.gameplayKey === 'yishuhuanfu')
     return '/activity-assets/yishuhuanfu/icon.png'
   if (activity.activityIds.some(id => ['2026111800', '2026111801'].includes(id)))
     return '/activity-assets/friend-recall/icon.png'

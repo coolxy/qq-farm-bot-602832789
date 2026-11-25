@@ -1,27 +1,27 @@
 <script setup lang="ts">
-import type { SweetPotatoActivityDto, SweetPotatoCatalogEntryDto, SweetPotatoFriendShopDto, SweetPotatoRecordDto } from '@/stores/activity-center'
+import type { YishuHuanfuActivityDto, YishuHuanfuCatalogEntryDto, YishuHuanfuFriendShopDto, YishuHuanfuRecordDto } from '@/stores/activity-center'
 import { computed, ref, watch } from 'vue'
 
 const props = defineProps<{
-  activity: SweetPotatoActivityDto | null
+  activity: YishuHuanfuActivityDto | null
   pendingSeed: boolean
   pendingSell: boolean
   pendingShare: boolean
   pendingExchange: boolean
   pendingQuote: boolean
   pendingCommission: boolean
-  friendShops: SweetPotatoFriendShopDto[]
+  friendShops: YishuHuanfuFriendShopDto[]
   friendShopsLoading: boolean
   friendScanAt: number
   friendScanNote: string
-  records: SweetPotatoRecordDto[]
+  records: YishuHuanfuRecordDto[]
   recordsLoading: boolean
   recordsNote: string
 }>()
 
 const emit = defineEmits<{
   claimSeed: []
-  sell: [payload: { friendGid: string, count: number | null, expectedPrice: number | null }]
+  sell: [payload: { friendGid: string, count: number | null }]
   share: []
   exchange: [index: number, count: number]
   scanFriends: [force: boolean]
@@ -171,16 +171,13 @@ function submitSell() {
     friendGid: targetGid.value,
     // 空输入表示卖出背包全部，交给后端按当前余额裁决。
     count: sellCountText.value.trim() ? sellCount.value : null,
-    // 后端卖好友时必须拿它和现查价格比对：价格变了直接拒绝，避免按旧价成交。
-    // 卖给自己没有「对方报价」这回事，传 null 让后端跳过这项校验。
-    expectedPrice: targetGid.value ? unitPrice.value : null,
   })
 }
 
 // 兑换数量是逐档独立选择的：cmd 96 的 params 里本来就带 count，服务端按 count × 单价扣币。
 // 兑换数量不再放在卡片上内联调整——卡片只留一个「兑换」按钮，
 // 点开弹窗再填数量（参考同类工具的做法：避免误触一换就是多份）。
-const exchangeTarget = ref<SweetPotatoCatalogEntryDto | null>(null)
+const exchangeTarget = ref<YishuHuanfuCatalogEntryDto | null>(null)
 const exchangeQty = ref(1)
 
 // 上限取「本档剩余可兑」和「福气币够买几次」的较小值；余额为 0 时仍然允许 1，交给服务端裁决。
@@ -202,7 +199,7 @@ const exchangeCost = computed(() => {
 })
 const exchangeBalance = computed(() => Math.max(0, luckCoin.value - exchangeCost.value))
 
-function openExchange(entry: SweetPotatoCatalogEntryDto) {
+function openExchange(entry: YishuHuanfuCatalogEntryDto) {
   if (busy.value || !canExchange.value || !canExchangeEntry(entry))
     return
   exchangeTarget.value = entry

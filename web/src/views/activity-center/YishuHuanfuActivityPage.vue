@@ -2,7 +2,7 @@
 import { NButton } from 'naive-ui/es/button'
 import { storeToRefs } from 'pinia'
 import { computed, watch } from 'vue'
-import { SweetPotatoTab } from '@/components/activity/gameplays/sweetPotato'
+import { YishuHuanfuTab } from '@/components/activity/gameplays/yishuhuanfu'
 import { useAccountStore } from '@/stores/account'
 import { useActivityCenterStore } from '@/stores/activity-center'
 import { useActivityClock } from './useActivityClock'
@@ -12,22 +12,22 @@ const accountStore = useAccountStore()
 const activityStore = useActivityCenterStore()
 const { currentAccountId } = storeToRefs(accountStore)
 const {
-  sweetPotatoDetail,
-  sweetPotatoDetailLoading,
+  yishuHuanfu,
+  loading,
   error,
   actionError,
   notice,
   pendingActions,
-  sweetPotatoFriendShops,
-  sweetPotatoFriendShopsLoading,
-  sweetPotatoFriendScanAt,
-  sweetPotatoFriendScanNote,
-  sweetPotatoRecords,
-  sweetPotatoRecordsLoading,
-  sweetPotatoRecordsNote,
+  yishuHuanfuFriendShops,
+  yishuHuanfuFriendShopsLoading,
+  yishuHuanfuFriendScanAt,
+  yishuHuanfuFriendScanNote,
+  yishuHuanfuRecords,
+  yishuHuanfuRecordsLoading,
+  yishuHuanfuRecordsNote,
 } = storeToRefs(activityStore)
 const { remaining } = useActivityClock()
-const remainingText = remaining(computed(() => sweetPotatoDetail.value?.endTime))
+const remainingText = remaining(computed(() => yishuHuanfu.value?.endTime))
 
 const numberFormatter = new Intl.NumberFormat('zh-CN')
 function formatNumber(value: string | number | null | undefined) {
@@ -47,10 +47,10 @@ function accountId() {
   return String(currentAccountId.value || '')
 }
 async function refreshActivity() {
-  const ok = await activityStore.loadSweetPotatoDetail(accountId())
+  const ok = await activityStore.loadDetails(accountId(), 'yishuhuanfu')
   // 兑换档位的价格与剩余次数会随当日行情变，刷新时一并重拉 cmd 97，
   // 否则「已加载过」的旧目录会一直挂在界面上。
-  activityStore.loadSweetPotatoCatalog(accountId())
+  activityStore.loadYishuHuanfuCatalog(accountId())
   // 收购记录同样不进快照，页头刷新要一起更新，不能只刷余额和行情。
   loadRecords(true)
   return ok
@@ -59,22 +59,21 @@ async function refreshActivity() {
 // 兑换目录（cmd 97）和本人铺子额度（cmd 92）都不在快照里，进页面各拉一次。
 function loadCatalog() {
   const id = accountId()
-  if (!id || !sweetPotatoDetail.value || sweetPotatoDetail.value.catalogLoaded)
+  if (!id || !yishuHuanfu.value || yishuHuanfu.value.catalogLoaded)
     return
-  activityStore.loadSweetPotatoCatalog(id)
+  activityStore.loadYishuHuanfuCatalog(id)
 }
 
 function loadShopQuota() {
   const id = accountId()
-  if (!id || !sweetPotatoDetail.value || sweetPotatoDetail.value.shop.quota !== null)
+  if (!id || !yishuHuanfu.value || yishuHuanfu.value.shop.quota !== null)
     return
-  // 静默查额度：进页面自动补齐不该闪刷新按钮的 loading，也不该覆盖已有提示。
-  activityStore.loadSweetPotatoShop(id)
+  activityStore.loadYishuHuanfuShop(id)
 }
 
 // 账号切换、或详情首次到位时补一次；已有值时不重复请求。
 watch(
-  () => [currentAccountId.value, sweetPotatoDetail.value?.activityId, sweetPotatoDetail.value?.catalogLoaded, sweetPotatoDetail.value?.shop.quota],
+  () => [currentAccountId.value, yishuHuanfu.value?.activityId, yishuHuanfu.value?.catalogLoaded, yishuHuanfu.value?.shop.quota],
   () => {
     loadCatalog()
     loadShopQuota()
@@ -87,7 +86,7 @@ watch(
 // 这里再用 force 跳过「已加载」守卫，否则会沿用上一个账号的列表。
 let recordsAccountId = ''
 watch(
-  () => [currentAccountId.value, sweetPotatoDetail.value?.activityId],
+  () => [currentAccountId.value, yishuHuanfu.value?.activityId],
   () => {
     const id = accountId()
     if (!id)
@@ -99,13 +98,16 @@ watch(
   { immediate: true },
 )
 
-async function onSell(payload: { friendGid: string, count: number | null, expectedPrice: number | null }) {
+async function onSell(payload: { friendGid: string, count: number | null }) {
   const id = accountId()
   if (!id)
     return
-  // 本地后端卖好友铺子要拿 expectedPrice 与现查价格比对（价变了直接拒绝），
-  // 卖给自己没有「对方报价」，传 null 让后端跳过这项校验。
-  await activityStore.sellSweetPotato(id, payload.friendGid, payload.count, payload.expectedPrice)
+  const ok = await activityStore.sellYishuHuanfuSweetPotato(id, payload.friendGid, payload.count)
+  // 卖完额度和比价都会变，顺手刷一遍；失败时也刷，避免额度显示落后。
+  if (ok)
+    activityStore.loadYishuHuanfuShop(id)
+  if (ok && payload.friendGid)
+    activityStore.scanYishuHuanfuFriendShops(id, true)
 }
 
 // 收购记录（cmd 95）不进快照，进页面拉一次；领完提成、卖完薯都重新拉，保持列表最新。
@@ -115,14 +117,14 @@ function loadRecords(force = false) {
   const id = accountId()
   if (!id)
     return
-  activityStore.loadSweetPotatoRecords(id, force)
+  activityStore.loadYishuHuanfuRecords(id, force)
 }
 
 async function onClaimCommission() {
   const id = accountId()
   if (!id)
     return
-  const ok = await activityStore.claimSweetPotatoCommission(id)
+  const ok = await activityStore.claimYishuHuanfuCommission(id)
   if (ok)
     loadRecords(true)
 }
@@ -147,7 +149,7 @@ async function onClaimCommission() {
           class="yshf-view__icon"
         >
         <div class="yshf-view__text">
-          <h1>{{ sweetPotatoDetail?.name || '以薯换福' }}</h1>
+          <h1>{{ yishuHuanfu?.name || '以薯换福' }}</h1>
           <p v-if="headMeta">
             <span class="i-carbon-time" aria-hidden="true" />{{ headMeta }}
           </p>
@@ -155,10 +157,10 @@ async function onClaimCommission() {
       </div>
       <div class="yshf-view__actions">
         <div class="yshf-view__balance" title="福气币">
-          <img v-if="sweetPotatoDetail?.luckCoin.image" :src="sweetPotatoDetail.luckCoin.image" alt="">
-          <b>{{ sweetPotatoDetail?.luckCoinBalanceKnown ? formatNumber(sweetPotatoDetail.luckCoinBalance || '0') : '--' }}</b>
+          <img v-if="yishuHuanfu?.luckCoin.image" :src="yishuHuanfu.luckCoin.image" alt="">
+          <b>{{ yishuHuanfu?.luckCoinBalanceKnown ? formatNumber(yishuHuanfu.luckCoinBalance || '0') : '--' }}</b>
         </div>
-        <NButton quaternary circle :loading="sweetPotatoDetailLoading" title="刷新活动数据" aria-label="刷新活动数据" @click="refreshActivity">
+        <NButton quaternary circle :loading="loading" title="刷新活动数据" aria-label="刷新活动数据" @click="refreshActivity">
           <template #icon>
             <span class="i-carbon-renew" />
           </template>
@@ -169,7 +171,7 @@ async function onClaimCommission() {
     <div v-if="!currentAccountId" class="yshf-view__state">
       <strong>请先选择账号</strong><span>活动数据按当前账号加载</span>
     </div>
-    <div v-else-if="sweetPotatoDetailLoading && !sweetPotatoDetail" class="yshf-view__state">
+    <div v-else-if="loading && !yishuHuanfu" class="yshf-view__state">
       <span class="yshf-view__spinner" /><strong>正在加载以薯换福</strong>
     </div>
     <template v-else>
@@ -180,34 +182,34 @@ async function onClaimCommission() {
         role="status"
       >
         <span>{{ actionError || error || notice }}</span>
-        <button v-if="error" type="button" :disabled="sweetPotatoDetailLoading" @click="refreshActivity">
+        <button v-if="error" type="button" :disabled="loading" @click="refreshActivity">
           重试
         </button>
       </div>
-      <SweetPotatoTab
-        :activity="sweetPotatoDetail"
-        :pending-seed="pendingActions.claimSweetPotatoSeed"
-        :pending-sell="pendingActions.sellSweetPotato"
-        :pending-share="pendingActions.shareSweetPotatoShop"
-        :pending-exchange="pendingActions.exchangeSweetPotatoGoods"
-        :pending-quote="pendingActions.refreshSweetPotatoQuote"
-        :pending-commission="pendingActions.claimSweetPotatoCommission"
-        :friend-shops="sweetPotatoFriendShops"
-        :friend-shops-loading="sweetPotatoFriendShopsLoading"
-        :friend-scan-at="sweetPotatoFriendScanAt"
-        :friend-scan-note="sweetPotatoFriendScanNote"
-        :records="sweetPotatoRecords"
-        :records-loading="sweetPotatoRecordsLoading"
-        :records-note="sweetPotatoRecordsNote"
-        @claim-seed="activityStore.claimSweetPotatoSeeds(accountId())"
+      <YishuHuanfuTab
+        :activity="yishuHuanfu"
+        :pending-seed="pendingActions.claimYishuHuanfuSeed"
+        :pending-sell="pendingActions.sellYishuHuanfuSweetPotato"
+        :pending-share="pendingActions.shareYishuHuanfuShop"
+        :pending-exchange="pendingActions.exchangeYishuHuanfuGoods"
+        :pending-quote="pendingActions.refreshYishuHuanfuQuote"
+        :pending-commission="pendingActions.claimYishuHuanfuCommission"
+        :friend-shops="yishuHuanfuFriendShops"
+        :friend-shops-loading="yishuHuanfuFriendShopsLoading"
+        :friend-scan-at="yishuHuanfuFriendScanAt"
+        :friend-scan-note="yishuHuanfuFriendScanNote"
+        :records="yishuHuanfuRecords"
+        :records-loading="yishuHuanfuRecordsLoading"
+        :records-note="yishuHuanfuRecordsNote"
+        @claim-seed="activityStore.claimYishuHuanfuSeeds(accountId())"
         @sell="onSell"
-        @share="activityStore.shareSweetPotatoShop(accountId())"
-        @exchange="(index, count) => activityStore.exchangeSweetPotatoGoods(accountId(), index, count)"
-        @scan-friends="(force) => activityStore.scanSweetPotatoFriendShops(accountId(), force)"
+        @share="activityStore.shareYishuHuanfuShop(accountId())"
+        @exchange="(index, count) => activityStore.exchangeYishuHuanfuGoods(accountId(), index, count)"
+        @scan-friends="(force) => activityStore.scanYishuHuanfuFriendShops(accountId(), force)"
         @refresh-shop="loadShopQuota"
-        @refresh-quote="activityStore.refreshSweetPotatoQuote(accountId())"
+        @refresh-quote="activityStore.refreshYishuHuanfuQuote(accountId())"
         @claim-commission="onClaimCommission"
-        @load-records="activityStore.loadSweetPotatoRecords(accountId(), true)"
+        @load-records="activityStore.loadYishuHuanfuRecords(accountId(), true)"
       />
     </template>
   </section>
@@ -221,12 +223,6 @@ async function onClaimCommission() {
   flex-direction: column;
   gap: 12px;
   padding-bottom: 24px;
-  /*
-   * 本地与 li 版的布局差异只有滚动归属：li 版页面挂在可滚动区里，本地活动详情态
-   * 由父级 overflow: hidden 交给页面自管。这里自己开滚动，视觉不变。
-   */
-  min-height: 0;
-  overflow-y: auto;
 }
 
 .yshf-view__head {

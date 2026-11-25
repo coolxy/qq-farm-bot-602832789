@@ -15,6 +15,7 @@
 
 | 版本 | 更新序号 | 日期 | 更新内容 | 提交 |
 | --- | --- | --- | --- | --- |
+| v3.39.7 | #273 | 2026-11-26 | 完整移植 li 版以薯换福，删除本地 sweet-potato 全链路 | — |
 | v3.39.6 | #272 | 2026-11-26 | 以薯换福页面完全按 li 版重做 | — |
 | v3.39.5 | #271 | 2026-11-26 | 按 li 版设计稿重构以薯换福活动页，修复补种模块路径与面板版本号不同步 | — |
 | v3.39.3 | #270 | 2026-11-26 | 常规更新 | — |
@@ -260,6 +261,48 @@ flowchart TB
 ```
 
 ## 详细记录
+
+### 2026-11-26 · v3.39.7（#273） · 完整移植 li 版以薯换福，删除本地 sweet-potato 全链路
+
+用户第三次明确要求：**不要「参考 li 版重做」，而是把 li 版的以薯换福原样搬过来，本地那一版整套删掉。**
+所以这一轮不做适配层、不做命名保留，连协议文件、接口路径、组件名、store 片段都换成 li 版原文件。
+
+**一、删除本地那一版（全部代码）**
+
+- 后端：`services/activity-center/sweet-potato.ts`、`controllers/admin/activity-center/sweet-potato-routes.ts`、`config/sweet-potato.ts`、`proto/sweet-potato.proto`、`tests/sweet-potato.test.js`。
+- 前端：`components/activity/SweetPotatoTab.vue`、`views/activity-center/SweetPotatoActivityPage.vue`、`components/activity/gameplays/sweetPotato/`、`tests/sweet-potato-activity.test.mjs`。
+- 本地额外叠在农场链路里的三处红薯逻辑一并撤掉（li 版没有这些）：
+  - `farm/planting.ts` 巡田「空地优先种红薯」整段（原来还带 `sweetPotatoPlantEmptyLands` 依赖注入）；
+  - `farm/scheduler.ts` 收获时按种植子开关排除红薯地块；
+  - `activity-automation.ts` 里 5 个 `sweet_potato_*` 任务与 `WINDOW_IDS.sweetPotato`。
+- `AccountFeatureSettings.vue` 的以薯换福卡片、`constants/activity-windows.ts` 的三个常量与两组选项、`stores/setting.ts` 的 8 个字段全部移除。
+
+**二、后端逐字移植（文件级一致）**
+
+- `core/src/proto/activitypb.proto` 并入 li 版 271 行 Yshf 协议块与 8 个 191~199 回包槽，diff 与 li 版**完全一致**；`sweet-potato.proto` 删除。
+- `utils/proto.ts` 的 `SweetPotatoGroupReply/SweetPotatoOperate*` 查找换成 li 版的 `YshfState/YshfCatalog/Yshf*Request` 一组。
+- 新增 `services/activity-center/yishuhuanfu.ts`（987 行）、`services/yishuhuanfu-auto.ts`（355 行）、`controllers/admin/activity-center/yishuhuanfu-routes.ts`（33 行）—— 三个文件与 li 版 **`diff` 为空**。
+- 接线：`activity-center.ts` 按 li 版 `createYishuHuanfuActivityService` 注入 17 个依赖并导出 11 个方法；快照 key 从 `sweetPotato` 改为 `yishuHuanfu`，`buildActivityDirectory` 增加第 10 个参数把铺子 GID 传给玩法绑定；`activity-gameplay-registry.ts` 与 li 版一致（`yishuhuanfu` / priority 90）；`data-provider.ts`、`worker.ts` 的 11 个分发分支、`worker-manager.ts` 的超时表全部改名。
+- 自动化：li 版用独立 10 分钟定时器（`startYishuTimer`，首跑 260s、相位 4min、单轮最多 3 家铺子、笔间隔 1200ms），串在 `runExclusiveAutomationTask('yishuhuanfu')` 同一把全局锁里；在 `worker.ts` 两处（登录暖机后、配置下发后）注册，与 li 版位置一致。
+- 默认值：`shared-state.ts` 用 li 版 8 个 `yishu_*` 默认值（4 个开关 + 兜底 + 3 个数值），数值夹取区间对齐 `yishuhuanfu-auto.ts` 的 `toInt`（1~50 / 5~720 / 1~10000）。
+
+**三、前端逐字移植**
+
+- `stores/activity-center.ts` 整份换成 li 版：`YishuHuanfuActivityDto` 等 5 个 DTO、`normalizeYishuHuanfu()`、余额兜底、好友扫描/记录/目录/铺子 11 个动作、6 个 pending 键，命名全部 `yishuHuanfu`。
+- `components/activity/YishuHuanfuTab.vue`（1588 行）、`views/activity-center/YishuHuanfuActivityPage.vue`（356 行）、`gameplays/yishuhuanfu/index.ts` 三份与 li 版 **`diff` 为空**。
+- `ActivityCenter.vue`、`gameplays/index.ts`、`ActivityDirectoryPage.vue`、`AutomationSettingsForm.vue` 全部换回 li 版写法（目录页保留本地「节令日历」常驻入口与 `createRequestGuard`）。
+- 接口路径随之改成 `/api/activity-center/yishuhuanfu/*`（`/catalog` `/records` `/shop` `/friends` `/sell` `/exchange` `/seed/claim` `/share` `/quote/refresh` `/commission/claim`），旧的 `/sweet-potato/*` 现在返回 404。
+
+**四、唯一保留的一处本地修复**
+
+- `store.reset()` 里补回 `pendingLoads.clear()`：li 版没有这两行，切号后同一 `accountId` 的旧 `loadDetails` Promise 会被复用，把上一个会话的数据写回快照。这是与活动方案无关的缺陷修复，`web/tests/full-review-regression.test.mjs` 也在钉它。
+
+**五、验证**
+
+- `pnpm build:core` 通过；core 测试 **1121 条全绿**（新增 li 版 3 个测试文件：`yishuhuanfu-service` / `yishuhuanfu-proto` / `yishuhuanfu-auto`）。
+- `pnpm build:web` 通过；web 测试 **373 条全绿**（新增 li 版 `yishuhuanfu-catalog-normalize` / `yishuhuanfu-records-account`）。
+- 实机接口：`/api/activity-center/yishuhuanfu`、`/catalog`、`/records`、`/shop`、`/friends` 全部 200（返回 `ACCOUNT_OFFLINE`，本机 Code 已过期需重新扫码），`/sweet-potato*` 已 404。
+- `input-surface.test.js` 的字段清单按新路由重写（`friendGid` / `count` / `index` / `limit` / `force`），服务层校验器钉在 `yishuhuanfu.ts` 上。
 
 ### 2026-11-26 · v3.39.6（#272） · 以薯换福页面完全按 li 版重做
 
