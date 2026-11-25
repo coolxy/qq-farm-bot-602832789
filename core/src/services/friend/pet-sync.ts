@@ -24,7 +24,7 @@ const { toNum, log, logWarn, sleep, getSystemDateKey } = require('../../utils/ut
 const { createScheduler } = require('../scheduler');
 const { runExclusiveAutomationTask } = require('../automation-lock');
 const { getAllFriends, enterFriendFarm, leaveFriendFarm } = require('./api');
-const { extractReplyFriends, getInvalidKnownFriendGidSet } = require('./gid-manager');
+const { canScanFriend, extractReplyFriends, getInvalidKnownFriendGidSet } = require('./gid-manager');
 const {
     isFriendDogKnownToday,
     isFullSyncDoneToday,
@@ -82,6 +82,8 @@ let quotaRampLocked: boolean = false;
 let pacingDateKey: string = '';
 // 轮次链是否还在跑，停表之后不再自我续期
 let syncTimerActive: boolean = false;
+// 会话代次：停表（掉线/切号/关开关）后自增，用来让在飞的一轮和它的续期定时器立刻作废。
+let syncGeneration: number = 0;
 
 export interface FriendPetSyncResult {
     outcome: 'skipped' | 'fresh' | 'synced' | 'deferred' | 'error';
@@ -124,6 +126,7 @@ function describeDeferReason(reason: string): string {
     if (reason === 'round_quota') return '本轮配额已用完';
     if (reason === 'friend_task_busy') return '好友巡查占用';
     if (reason === 'switch_off') return '开关已关闭';
+    if (reason === 'partial_list') return '好友详情暂未齐全';
     return reason || '未知';
 }
 
@@ -173,7 +176,7 @@ export function planNextSyncPacing(result: FriendPetSyncResult | null | undefine
 
 /**
  * 'invalid' 与 'failed' 必须分开：
- * - invalid = 好友已失效/已被加黑（handleFriendEnterError 已处理），本轮就已了结，不必重试；
+ * - invalid = 好友已失效/已被加黑（handleFriendAccessError 已处理），本轮就已了结，不必重试；
  * - failed  = 超时/断连这类瞬时错误，好友本身没问题，当天还要补测。
  * 原来两者都算 failed，而「当日完成」只看 deferred 不看 failed，一次瞬时错误就会
  * markFullSyncDone，该好友当天再无护主犬结论 → 经验上限开启时整天不帮忙。
@@ -191,7 +194,7 @@ async function probeFriendDog(gid: number, name: string): Promise<ProbeOutcome> 
         // 网关没余力或连接已断：这不是这位好友的问题，整轮让路，不逐个刷超时日志
         if (isGatewayYieldError(e)) return 'yield';
         // 复用已有的封禁加黑、失效好友清理逻辑
-        const handled: { handled: boolean; kind: string } = visitStrategyRef().handleFriendEnterError(gid, name, e);
+        const handled = visitStrategyRef().handleFriendAccessError(gid, name, e, entered);
         if (handled.handled) return 'invalid';
         logWarn('好友', `同步宠物时进入 ${name} 农场失败: ${e.message}`, {
             module: 'friend', event: '好友宠物同步', result: 'error', friendName: name, friendGid: gid,
@@ -212,7 +215,7 @@ export function collectPendingFriends(friends: any[], myGid: number, blacklist: 
         if (gid <= 0 || gid === myGid) continue;
         if (seen.has(gid)) continue;
         seen.add(gid);
-        if (blacklist.has(gid) || invalid.has(gid)) continue;
+        if (blacklist.has(gid) || invalid.has(gid) || !canScanFriend(gid)) continue;
         // 当天已经有结论的不重复同步（包括帮忙/偷菜/天气扫描顺手写入的）
         if (isFriendDogKnownToday(gid)) continue;
         pending.push({ gid, name: friend.remark || friend.name || `GID:${gid}` });
@@ -230,6 +233,7 @@ export function runFriendPetSync(): Promise<FriendPetSyncResult> {
 
 async function runFriendPetSyncRound(): Promise<FriendPetSyncResult> {
     if (syncRunning) return { outcome: 'skipped', reason: 'running' };
+    const generation: number = syncGeneration;
 
     const gate: { enabled: boolean; reason: string } = isSyncEnabled();
     if (!gate.enabled) return { outcome: 'skipped', reason: gate.reason };
@@ -256,14 +260,26 @@ async function runFriendPetSyncRound(): Promise<FriendPetSyncResult> {
         if (!await waitForGatewayIdle(GATEWAY_IDLE_WAIT_MAX_MS)) {
             return { outcome: 'deferred', reason: classifyGatewayDefer() };
         }
-        const reply: any = await getAllFriends(false, 'low');
-        const friends: any[] = extractReplyFriends(reply);
+        if (generation !== syncGeneration) return { outcome: 'skipped', reason: 'session_changed' };
+        // 这里只需要 GID 和名称，复用农场巡查的名单，不为宠物同步重读几百位好友详情。
+        let roster = visitStrategyRef().getFreshConfirmedFriends();
+        if (!roster) {
+            const reply: any = await runExclusiveAutomationTask('friend_pet_list', () => {
+                if (generation !== syncGeneration || schedulerRef().isFriendCheckRunning()) return null;
+                return getAllFriends(false, 'low');
+            });
+            if (generation !== syncGeneration) return { outcome: 'skipped', reason: 'session_changed' };
+            if (!reply) return { outcome: 'deferred', reason: 'friend_task_busy' };
+            visitStrategyRef().cacheFriendsListFromReply(reply);
+            roster = { friends: extractReplyFriends(reply), partial: !!reply.partial };
+        }
         const accountId: string = process.env.FARM_ACCOUNT_ID || '';
         const blacklist: Set<number> = new Set(getFriendBlacklist(accountId));
         const invalid: Set<number> = getInvalidKnownFriendGidSet();
-        const pending: Array<{ gid: number; name: string }> = collectPendingFriends(friends, myGid, blacklist, invalid);
+        const pending = collectPendingFriends(roster.friends, myGid, blacklist, invalid);
 
         if (pending.length === 0) {
+            if (roster.partial) return { outcome: 'deferred', reason: 'partial_list', checked: 0 };
             markFullSyncDone();
             return { outcome: 'fresh', reason: 'all_known', checked: 0 };
         }
@@ -307,7 +323,21 @@ async function runFriendPetSyncRound(): Promise<FriendPetSyncResult> {
                     yielded = true;
                     break;
                 }
-                const outcome: ProbeOutcome = await probeFriendDog(friend.gid, friend.name);
+                // 只对 Enter/Leave 这一对操作持锁，等待和批次间隔留给农场巡查。
+                const outcome: ProbeOutcome | 'friend_task_busy' | 'switch_off' | 'skipped' = await runExclusiveAutomationTask('friend_pet_visit', async () => {
+                    if (generation !== syncGeneration || !isSyncEnabled().enabled || !getUserState().gid) return 'switch_off';
+                    if (schedulerRef().isFriendCheckRunning()) return 'friend_task_busy';
+                    if (!isGatewayHealthyForBusiness(getGatewayLoad())) return 'yield';
+                    if (!canScanFriend(friend.gid)) return 'skipped';
+                    return probeFriendDog(friend.gid, friend.name);
+                });
+                if (outcome === 'skipped') continue;
+                if (outcome === 'friend_task_busy' || outcome === 'switch_off') {
+                    deferred = pending.length - checked - failed;
+                    deferReason = outcome;
+                    yielded = true;
+                    break;
+                }
                 if (outcome === 'yield') {
                     // 请求排到一半网关就忙起来了：本轮到此为止，剩下的等下一轮
                     deferred = pending.length - checked - failed;
@@ -329,14 +359,17 @@ async function runFriendPetSyncRound(): Promise<FriendPetSyncResult> {
         // 只有真正跑完才标记当日完成，否则下一次定时检查继续补剩下的。
         // failed 必须一起判断：瞬时错误（超时/断连）没测到的好友，当天还要重试；
         // 原来只看 deferred，最后一个好友探测失败时会被误判为「全部完成」。
-        if (deferred === 0 && failed === 0) markFullSyncDone();
+        // 名单不完整（partial_list）同样不算跑完，未确认的好友下一轮继续补。
+        if (generation !== syncGeneration) return { outcome: 'skipped', reason: 'session_changed' };
+        if (!deferReason && roster.partial) deferReason = 'partial_list';
+        if (deferred === 0 && failed === 0 && !deferReason) markFullSyncDone();
 
         const stats: any = getFriendPetCacheStats();
-        const deferNote: string = deferred > 0 ? `（让路原因：${describeDeferReason(deferReason)}）` : '';
+        const deferNote: string = deferReason ? `（${describeDeferReason(deferReason)}）` : '';
         log('好友', `好友宠物同步完成：确认 ${checked}，失败 ${failed}，待补 ${deferred}${deferNote}，当日护主犬 ${stats.protect} 位`, {
             module: 'friend',
             event: '好友宠物同步',
-            result: deferred > 0 ? 'deferred' : 'ok',
+            result: deferReason ? 'deferred' : 'ok',
             checked,
             failed,
             deferred,
@@ -346,7 +379,7 @@ async function runFriendPetSyncRound(): Promise<FriendPetSyncResult> {
         });
 
         return {
-            outcome: deferred > 0 ? 'deferred' : 'synced',
+            outcome: deferReason ? 'deferred' : 'synced',
             reason: deferReason || undefined,
             checked,
             failed,
@@ -373,6 +406,7 @@ async function runFriendPetSyncRound(): Promise<FriendPetSyncResult> {
  */
 function scheduleNextSyncRound(delayMs: number): void {
     if (!syncTimerActive) return;
+    const generation: number = syncGeneration;
     petSyncScheduler.setTimeoutTask('friend_pet_sync_round', Math.max(1000, delayMs), async () => {
         let nextDelayMs: number = SYNC_CHECK_INTERVAL_MS;
         try {
@@ -384,7 +418,8 @@ function scheduleNextSyncRound(delayMs: number): void {
         } catch {
             // 同步内部已经兜住了自己的异常，这里只保证轮次链不断
         }
-        scheduleNextSyncRound(nextDelayMs);
+        // 这一轮跑的时候会话已经换过（停表/重连），就不要再自我续期。
+        if (generation === syncGeneration) scheduleNextSyncRound(nextDelayMs);
     });
 }
 
@@ -395,6 +430,7 @@ export function startFriendPetSyncTimer(): void {
 }
 
 export function stopFriendPetSyncTimer(): void {
+    syncGeneration++;
     syncTimerActive = false;
     petSyncScheduler.clearAll();
     // 掉线重连后重新开始，不把上一条连接的冷却和退避带过来

@@ -73,11 +73,21 @@ test('持续离线被自动删除时，正文写清楚离线时长', async () =>
     assert.match(sent[0].content, /30 分钟/);
 });
 
-test('钉钉渠道缺 Webhook 地址时不发送（token 单独存在也发不出去）', async () => {
-    const { service, sent, logs } = harness(webhookConfig({ channel: 'dingtalk', endpoint: '', token: 'some-token' }));
+test('钉钉只存 access token 时自动拼成 Webhook 地址再发送', async () => {
+    const { service, sent } = harness(webhookConfig({ channel: 'dingtalk', endpoint: '', token: 'some-token' }));
 
     await service.triggerOfflineReminder({ accountId: '1', accountName: '甲', reason: 'kickout:x' });
 
-    assert.equal(sent.length, 0, '配置必然失败时不该调用推送');
-    assert.ok(logs.some(item => /钉钉渠道未设置 Webhook 地址/.test(item.msg)));
+    assert.equal(sent.length, 1, '只给了 access token 也要能发出去（旧配置就是这种形态）');
+    assert.equal(sent[0].channel, 'dingtalk');
+    assert.equal(sent[0].endpoint, 'https://oapi.dingtalk.com/robot/send?access_token=some-token');
+    assert.equal(sent[0].token, '', 'token 已经折进 endpoint，不再重复传');
+});
+
+test('钉钉既没有地址也没有 token 时一个请求都不发', async () => {
+    const { service, sent } = harness(webhookConfig({ channel: 'dingtalk', endpoint: '', token: '' }));
+
+    await service.triggerOfflineReminder({ accountId: '1', accountName: '甲', reason: 'kickout:x' });
+
+    assert.equal(sent.length, 0, '渠道配置不完整时不该调用推送');
 });

@@ -1,12 +1,20 @@
 {
   "major": 3,
   "minor": 36,
-  "patch": 5,
-  "build": 257,
-  "version": "3.36.5",
-  "updatedAt": "2026-11-24T14:29:28.057Z",
+  "patch": 6,
+  "build": 258,
+  "version": "3.36.6",
+  "updatedAt": "2026-11-24T16:05:16.790Z",
   "lastCommit": "—",
   "history": [
+    {
+      "version": "3.36.6",
+      "build": 258,
+      "date": "2026-11-25",
+      "summary": "同步上游 #186 / #187 / #188：好友名单复查、牧场帮忙生产巡查、多渠道推送",
+      "commit": "—",
+      "type": "patch"
+    },
     {
       "version": "3.36.5",
       "build": 257,

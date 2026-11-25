@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { OfflineConfig, PushChannelChange } from '@/stores/setting'
 import { NButton } from 'naive-ui/es/button'
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
@@ -7,13 +8,14 @@ import api, { getApiErrorMessage } from '@/api'
 import AccountFeatureSettings from '@/components/settings/AccountFeatureSettings.vue'
 import AccountManagementPanel from '@/components/settings/AccountManagementPanel.vue'
 import FriendApplyTab from '@/components/settings/FriendApplyTab.vue'
+import PushChannelsManager from '@/components/settings/PushChannelsManager.vue'
 import VersionUpdatePanel from '@/components/settings/VersionUpdatePanel.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseSwitch from '@/components/ui/BaseSwitch.vue'
 import { useAccountStore } from '@/stores/account'
-import { useSettingStore } from '@/stores/setting'
+import { createDefaultOfflineReminder, useSettingStore } from '@/stores/setting'
 import { useUserStore } from '@/stores/user'
 import { parseHourOfDay } from '@/utils/hour-of-day'
 
@@ -481,94 +483,20 @@ const passwordForm = ref({
   confirm: '',
 })
 
-const localOffline = ref({
-  channel: 'webhook',
-  endpoint: '',
-  token: '',
-  secret: '',
-  title: '',
-  msg: '',
-  offlineDeleteSec: 0,
-})
+// 通知设置：单渠道字段与多渠道 channels 共用同一份草稿，channels 由渠道管理组件维护。
+const localOffline = ref<OfflineConfig>(createDefaultOfflineReminder())
 
-const channelOptions = [
-  { label: 'Webhook(自定义接口)', value: 'webhook' },
-  { label: 'Qmsg 酱', value: 'qmsg' },
-  { label: 'Server 酱', value: 'serverchan' },
-  { label: 'Push Plus', value: 'pushplus' },
-  { label: 'Push Plus Hxtrip', value: 'pushplushxtrip' },
-  { label: '钉钉', value: 'dingtalk' },
-  { label: '企业微信', value: 'wecom' },
-  { label: 'Bark', value: 'bark' },
-  { label: 'Go-cqhttp', value: 'gocqhttp' },
-  { label: 'OneBot', value: 'onebot' },
-  { label: 'Atri', value: 'atri' },
-  { label: 'PushDeer', value: 'pushdeer' },
-  { label: 'iGot', value: 'igot' },
-  { label: 'Telegram', value: 'telegram' },
-  { label: '飞书', value: 'feishu' },
-  { label: 'IFTTT', value: 'ifttt' },
-  { label: '企业微信群机器人', value: 'wecombot' },
-  { label: 'Discord', value: 'discord' },
-  { label: 'WxPusher', value: 'wxpusher' },
-  { label: 'MeoW', value: 'meow' },
-]
-
-const CHANNEL_DOCS: Record<string, string> = {
-  webhook: '',
-  qmsg: 'https://qmsg.zendee.cn/',
-  serverchan: 'https://sct.ftqq.com/',
-  pushplus: 'https://www.pushplus.plus/',
-  pushplushxtrip: 'https://pushplus.hxtrip.com/',
-  dingtalk: 'https://open.dingtalk.com/document/orgapp/customize-robot-security-settings',
-  wecom: 'https://guole.fun/posts/626/',
-  wecombot: 'https://developer.work.weixin.qq.com/document/path/91770',
-  bark: 'https://github.com/Finb/Bark',
-  gocqhttp: 'https://docs.go-cqhttp.org/api/',
-  onebot: 'https://docs.go-cqhttp.org/api/',
-  atri: 'https://blog.tianli0.top/',
-  pushdeer: 'https://www.pushdeer.com/',
-  igot: 'https://push.hellyw.com/',
-  telegram: 'https://core.telegram.org/bots',
-  feishu: 'https://www.feishu.cn/hc/zh-CN/articles/360024984973',
-  ifttt: 'https://ifttt.com/maker_webhooks',
-  discord: 'https://discord.com/developers/docs/resources/webhook#execute-webhook',
-  wxpusher: 'https://wxpusher.zjiecode.com/docs/#/',
-  meow: 'https://www.chuckfang.com/MeoW/api_doc.html',
-}
-
+// 渠道清单与文档地址由渠道管理组件统一维护（stores/setting.ts 的 PUSH_CHANNEL_OPTIONS）。
+// 这里只保留钉钉校验要用的判断。
 const offlineChannel = computed(() => String(localOffline.value.channel || '').trim().toLowerCase())
 const isDingTalkChannel = computed(() => offlineChannel.value === 'dingtalk')
-const isMeowChannel = computed(() => offlineChannel.value === 'meow')
-const offlineChannelUsesEndpoint = computed(() => offlineChannel.value === 'webhook' || isDingTalkChannel.value)
-const offlineEndpointLabel = computed(() => isDingTalkChannel.value ? 'Webhook 地址' : '接口地址')
-const offlineEndpointPlaceholder = computed(() => isDingTalkChannel.value
-  ? '从钉钉群机器人设置页复制完整 Webhook'
-  : '接收消息的接口地址')
-const offlineTokenLabel = computed(() => isMeowChannel.value ? '昵称' : 'Token')
-const offlineTokenPlaceholder = computed(() => isMeowChannel.value
-  ? 'MeoW 注册昵称'
-  : '接收端 token')
-const currentChannelDocUrl = computed(() => CHANNEL_DOCS[offlineChannel.value] || '')
-
-function openChannelDocs() {
-  const url = currentChannelDocUrl.value
-  if (!url)
-    return
-  window.open(url, '_blank', 'noopener,noreferrer')
-}
 
 function syncLocalOfflineSettings() {
   if (settings.value?.offlineReminder) {
     const saved = JSON.parse(JSON.stringify(settings.value.offlineReminder))
-    const next = {
-      channel: 'webhook',
-      endpoint: '',
-      token: '',
-      secret: '',
-      title: '',
-      msg: '',
-      offlineDeleteSec: 0,
+    // 以本地默认值为底，免得上游新增字段（channels / notificationTypes）在草稿里缺失。
+    const next: OfflineConfig = {
+      ...createDefaultOfflineReminder(),
       ...saved,
     }
 
@@ -668,6 +596,20 @@ async function handleSaveOffline() {
     else {
       showAlert(`保存失败: ${res.error || '未知错误'}`, 'danger')
     }
+  }
+  finally {
+    offlineSaving.value = false
+  }
+}
+
+/** 渠道管理组件单独保存一条渠道：只提交这条渠道的变更，其余渠道由后端合并。 */
+async function handleSaveChannel(change: PushChannelChange, onDone: (ok: boolean) => void) {
+  offlineSaving.value = true
+  try {
+    const result = await settingStore.saveOfflineConfig(change)
+    if (!result.ok)
+      showAlert(`保存推送渠道失败: ${result.error || '未知错误'}`, 'danger')
+    onDone(result.ok)
   }
   finally {
     offlineSaving.value = false
@@ -1025,53 +967,35 @@ async function handleResetSystemConfig() {
               </div>
             </div>
 
-            <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div class="min-w-0 flex flex-col gap-1.5">
-                <div class="min-h-6 flex items-center justify-between gap-2">
-                  <span class="text-sm text-gray-700 font-medium dark:text-gray-300">推送渠道</span>
-                  <BaseButton
-                    variant="text"
-                    size="sm"
-                    :disabled="!currentChannelDocUrl"
-                    @click="openChannelDocs"
-                  >
-                    官方文档
-                  </BaseButton>
+            <!-- 多渠道推送：一个实例可同时启用多个渠道，逐条测试、逐条开关。 -->
+            <PushChannelsManager
+              :config="localOffline"
+              :saving="offlineSaving || settingStore.supportsPushChannels === null"
+              :supports-channels="settingStore.supportsPushChannels !== false"
+              @save-channel="handleSaveChannel"
+            />
+
+            <fieldset class="mt-4">
+              <legend class="mb-2 text-sm text-gray-700 font-medium dark:text-gray-300">
+                通知类型
+              </legend>
+              <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <div class="flex items-center justify-between gap-3">
+                  <span class="text-sm text-gray-600 dark:text-gray-400">账号离线</span>
+                  <BaseSwitch v-model="localOffline.notificationTypes!.offline" label="账号离线" />
                 </div>
-                <BaseSelect
-                  v-model="localOffline.channel"
-                  :options="channelOptions"
-                />
+                <div class="flex items-center justify-between gap-3">
+                  <span class="text-sm text-gray-600 dark:text-gray-400">神秘商人到货</span>
+                  <BaseSwitch v-model="localOffline.notificationTypes!.mysteryArrival" label="神秘商人到货" />
+                </div>
+                <div class="flex items-center justify-between gap-3">
+                  <span class="text-sm text-gray-600 dark:text-gray-400">神秘商人自动购买</span>
+                  <BaseSwitch v-model="localOffline.notificationTypes!.mysteryPurchase" label="神秘商人自动购买" />
+                </div>
               </div>
+            </fieldset>
 
-              <BaseInput
-                v-if="offlineChannelUsesEndpoint"
-                v-model="localOffline.endpoint"
-                :label="offlineEndpointLabel"
-                type="text"
-                :placeholder="offlineEndpointPlaceholder"
-              />
-
-              <BaseInput
-                v-if="!isDingTalkChannel"
-                v-model="localOffline.token"
-                :label="offlineTokenLabel"
-                type="text"
-                :placeholder="offlineTokenPlaceholder"
-              />
-
-              <template v-else>
-                <BaseInput
-                  v-model="localOffline.secret"
-                  label="加签密钥（可选）"
-                  type="password"
-                  placeholder="仅在机器人开启加签时填写 SEC..."
-                />
-                <p class="text-xs text-gray-500 leading-relaxed sm:col-span-2 dark:text-gray-400">
-                  从群机器人的设置页复制完整 Webhook；只有开启“加签”时才需要填写加签密钥。
-                </p>
-              </template>
-
+            <div class="grid grid-cols-1 mt-3 gap-3 sm:grid-cols-2">
               <BaseInput
                 v-model="localOffline.title"
                 label="标题"

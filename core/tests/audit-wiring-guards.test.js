@@ -33,7 +33,8 @@ test('好友帮忙的经验闸门在缺少限制数据时放行，不能自锁',
 
 test('好友宠物同步遇到瞬时失败不标记当日完成', () => {
     const source = read('src/services/friend/pet-sync.ts');
-    assert.match(source, /if \(deferred === 0 && failed === 0\) markFullSyncDone\(\);/);
+    // 名单不完整（partial_list）同样不能算跑完：没确认到的好友下一轮还要补测。
+    assert.match(source, /if \(deferred === 0 && failed === 0 && !deferReason\) markFullSyncDone\(\);/);
     assert.match(source, /type ProbeOutcome = 'ok' \| 'invalid' \| 'failed' \| 'yield';/);
     assert.match(source, /if \(handled\.handled\) return 'invalid';/, '已失效/已拉黑要与瞬时失败区分开');
 });
@@ -43,9 +44,9 @@ test('拜访好友主路径用 finally 兜底 Leave，异常也不会留在别�
     const start = source.indexOf('export async function visitFriend(');
     const body = source.slice(start, source.indexOf('\n}\n', start));
     assert.match(body, /\} finally \{[\s\S]*leaveFriendFarm\(gid\)[\s\S]*\}/, 'Leave 必须放在 finally 里');
-    // Leave 只该由 finally 发一次，正常路径不要再额外发
-    assert.equal((body.match(/await leaveFriendFarm\(gid\)/g) || []).length, 2,
-        '预期两处：空快照早退 + finally；多出来的会让同一次拜访重复 Leave');
+    // Leave 只该由 finally 发一次：空快照那条早退路径也走 finally，所以全函数只剩一处调用。
+    assert.equal((body.match(/await leaveFriendFarm\(gid\)/g) || []).length, 1,
+        '只允许 finally 里那一处；多出来的会让同一次拜访重复 Leave');
 });
 
 test('清理过期预留组时只释放确实不合格的组，不误伤别的种子', () => {

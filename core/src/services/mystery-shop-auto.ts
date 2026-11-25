@@ -1,4 +1,4 @@
-export {};
+import type { PushNotification } from '../config/notification-types';
 
 const { getAutomation } = require('../models/store');
 const { log, logWarn } = require('../utils/utils');
@@ -188,7 +188,7 @@ async function checkMysteryShopTick(options: {
     getShop?: () => Promise<any>;
     buy?: (npcId: number) => Promise<any>;
     state?: MysteryShopAutoState;
-} = {}): Promise<{ skipped?: boolean; reason?: string; bought?: boolean; push?: { title: string; content: string } | null; event?: MysteryShopEvent | null }> {
+} = {}): Promise<{ skipped?: boolean; reason?: string; bought?: boolean; push?: { title: string; content: string } | null; notifications?: PushNotification[]; event?: MysteryShopEvent | null }> {
     const automation = (options.getAutomation || getAutomation)() || {};
     const state = options.state || defaultState;
     if (!isMysteryShopWatchEnabled(automation)) {
@@ -261,7 +261,14 @@ async function checkMysteryShopTick(options: {
         return { bought, event };
     }
     commitMysteryShopNotify(state, String(decision.visitKey), flags);
-    return { bought, push: buildMysteryShopPush(shop, flags), event };
+    const push = buildMysteryShopPush(shop, flags);
+    const notifications: PushNotification[] = [];
+    if (push) notifications.push({ type: flags.purchase ? 'mysteryPurchase' : 'mysteryArrival', ...push });
+    if (flags.purchase && flags.arrival) {
+        const arrivalPush = buildMysteryShopPush(shop, { arrival: true, purchase: false });
+        if (arrivalPush) notifications.push({ type: 'mysteryArrival', ...arrivalPush });
+    }
+    return { bought, push, notifications, event };
 }
 
 module.exports = {

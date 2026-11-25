@@ -99,7 +99,7 @@ const moduleInfo: Record<ModuleKey, { title: string, description: string, icon: 
 const RANCH_MODULE_SWITCHES: Record<string, string[]> = {
   ranch_husbandry: ['ranch_harvest', 'ranch_produce', 'ranch_buy', 'ranch_activate_shed', 'ranch_sell', 'ranch_clean'],
   ranch_feed: ['ranch_grass', 'ranch_grass_buy', 'ranch_fill_cans', 'ranch_feed_normal', 'ranch_feed_organic', 'ranch_upgrade'],
-  ranch_friends: ['ranch_stroke', 'ranch_friend_clean', 'ranch_friend_mosquito'],
+  ranch_friends: ['ranch_stroke', 'ranch_friend_produce', 'ranch_friend_clean', 'ranch_friend_mosquito'],
   ranch_steal: ['ranch_friend_steal'],
   ranch_merchant: ['ranch_market_organic', 'ranch_market_organic_poop', 'ranch_market_organic_pinecone'],
   ranch_daily: ['ranch_task', 'ranch_share', 'ranch_illustrated', 'ranch_daily_benefit'],

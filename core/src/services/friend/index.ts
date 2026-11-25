@@ -54,4 +54,5 @@ export {
     getFriendLandsDetail,
     getFriendsList,
     getFriendsListCacheOnly,
+    isFriendsListPartial,
 } from './visit-strategy';

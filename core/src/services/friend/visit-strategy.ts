@@ -12,7 +12,8 @@ const {
     getFriendsListCacheTtlSec,
     getStealDelaySeconds,
 } = require('../../models/store');
-const { getUserState } = require('../../utils/network');
+const { getUserState, networkEvents } = require('../../utils/network');
+const { isGatewayYieldError } = require('../../utils/low-priority-gate');
 const { toNum, getServerTimeSec, getSystemClockMinutes, log, logWarn, sleep, randomDelay } = require('../../utils/utils');
 
 const {
@@ -40,6 +41,11 @@ const {
 } = require('./api');
 const {
     extractReplyFriends,
+    parseRpcErrorCode,
+    isInvalidFriendAccessError,
+    getInvalidKnownFriendGidSet,
+    getEffectiveKnownQqFriendGids,
+    hasDueFriendSummary,
     postToMaster,
     removeKnownFriendGid,
 } = require('./gid-manager');
@@ -55,7 +61,11 @@ function schedulerRef(): any {
 
 // ============ 内部状态 ============
 let friendsListCache: any[] | null = null;
-let friendsListCacheTime: number = 0;
+let friendsListCacheTime = 0;
+let friendsListPartial = false;
+let friendsListGeneration = 0;
+const friendLastSeenAt = new Map<number, number>();
+networkEvents.on('disconnected', clearFriendsListCache);
 
 function isProtectDog(dogInfo: any): boolean {
     return toNum(dogInfo && (dogInfo.dog_id ?? dogInfo.dogId)) === PROTECT_DOG_ID;
@@ -152,52 +162,6 @@ function getFriendsListCacheTtlMs(): number {
 
 // ============ 错误处理 ============
 
-function isEnterFarmBannedError(error: any): boolean {
-    const message: string = String((error && error.message) || error || '');
-    if (!message) return false;
-    return message.includes('1002003');
-}
-
-function parseRpcErrorCode(error: any): number {
-    const message: string = String((error && error.message) || error || '');
-    const match: RegExpMatchArray | null = message.match(/code=(\d+)/i);
-    return match ? (Number.parseInt(match[1], 10) || 0) : 0;
-}
-
-function isTransientNetworkError(error: any): boolean {
-    const message: string = String((error && error.message) || error || '');
-    if (!message) return false;
-    return [
-        '连接未打开',
-        '请求超时',
-        '请求已中断',
-        '连接关闭',
-        '连接已在加密途中关闭',
-        'worker exited',
-    ].some(keyword => message.includes(keyword));
-}
-
-function isInvalidFriendAccessError(error: any): boolean {
-    const message: string = String((error && error.message) || error || '');
-    if (!message || isEnterFarmBannedError(error) || isTransientNetworkError(error)) {
-        return false;
-    }
-
-    const lowerMessage: string = message.toLowerCase();
-    const hasInvalidKeyword: boolean = [
-        '无效',
-        '不存在',
-        '删除',
-        '关系',
-        'not found',
-        'invalid',
-        'not friend',
-        'friend',
-    ].some(keyword => lowerMessage.includes(keyword.toLowerCase()));
-
-    return hasInvalidKeyword && parseRpcErrorCode(error) > 0;
-}
-
 function addFriendToBlacklist(friendGid: any, friendName: string, reason: string = ''): boolean {
     const gid: number = toNum(friendGid);
     if (!gid) return false;
@@ -225,16 +189,17 @@ function addFriendToBlacklist(friendGid: any, friendName: string, reason: string
     return true;
 }
 
-export function handleFriendEnterError(friendGid: any, friendName: string, error: any): { handled: boolean; kind: string } {
+export function handleFriendAccessError(friendGid: any, friendName: string, error: any, entered = false): { handled: boolean; kind: string } {
     const gid: number = toNum(friendGid);
     const displayName: string = String(friendName || '').trim() || `GID:${gid}`;
     const reason: string = String((error && error.message) || error || '');
-    if (isEnterFarmBannedError(error)) {
+    if (!entered && parseRpcErrorCode(error) === 1002003) {
         addFriendToBlacklist(gid, displayName, reason);
         return { handled: true, kind: 'blacklist' };
     }
-    if (isInvalidFriendAccessError(error)) {
+    if (isInvalidFriendAccessError(error, entered)) {
         removeKnownFriendGid(gid, displayName, reason);
+        removeFriendFromFriendsListCache(gid);
         return { handled: true, kind: 'invalid_removed' };
     }
     return { handled: false, kind: 'error' };
@@ -412,9 +377,13 @@ function withFriendPetView(list: any[]): any[] {
  * 获取好友列表 (供面板)
  */
 export function cacheFriendsListFromReply(reply: any): any[] {
-    const state: any = getUserState();
+    const selfGid: number = getUserState().gid;
+    const invalid = getInvalidKnownFriendGidSet();
     const result: any[] = extractReplyFriends(reply)
-        .filter((f: any) => toNum(f.gid) !== state.gid && f.name !== '小小农夫' && f.remark !== '小小农夫')
+        .filter((f: any) => {
+            const gid = toNum(f.gid);
+            return gid > 0 && gid !== selfGid && !invalid.has(gid);
+        })
         .map((f: any) => ({
             gid: toNum(f.gid),
             name: f.remark || f.name || `GID:${toNum(f.gid)}`,
@@ -446,16 +415,28 @@ export function cacheFriendsListFromReply(reply: any): any[] {
             return Number(a.gid || 0) - Number(b.gid || 0);
         });
 
-    friendsListCache = result;
+    // 部分回包保留已确认的详情；实时巡查仍单独按摘要时效更新状态。
+    if (reply?.partial) {
+        const known = new Set<number>(getEffectiveKnownQqFriendGids());
+        const merged = new Map((friendsListCache || []).filter(friend => known.has(friend.gid)).map(friend => [friend.gid, friend]));
+        for (const friend of result) merged.set(friend.gid, friend);
+        friendsListCache = [...merged.values()];
+    } else {
+        friendsListCache = result;
+        friendLastSeenAt.clear();
+    }
     friendsListCacheTime = Date.now();
-    return result;
+    for (const friend of result) friendLastSeenAt.set(friend.gid, friendsListCacheTime);
+    friendsListPartial = !!reply?.partial;
+    return friendsListCache;
 }
 
 export async function getFriendsList(forceSync: boolean = false, priority: 'low' | 'normal' = 'normal', propagateErrors: boolean = false): Promise<any[]> {
+    const generation = friendsListGeneration;
     try {
         // 检查缓存
         const now: number = Date.now();
-        if (!forceSync && friendsListCache && (now - friendsListCacheTime) < getFriendsListCacheTtlMs()) {
+        if (!forceSync && friendsListCache && (now - friendsListCacheTime) < getFriendsListCacheTtlMs() && !hasDueFriendSummary()) {
             return withFriendPetView(friendsListCache);
         }
 
@@ -464,6 +445,7 @@ export async function getFriendsList(forceSync: boolean = false, priority: 'low'
             event: '获取好友列表',
         });
         const reply: any = await getAllFriends(forceSync, priority);
+        if (generation !== friendsListGeneration) return getFriendsListCacheOnly();
         const result: any[] = cacheFriendsListFromReply(reply);
 
         log('好友', `获取好友列表成功，共 ${result.length} 位好友`, {
@@ -481,13 +463,24 @@ export async function getFriendsList(forceSync: boolean = false, priority: 'low'
             error: e.message,
         });
         if (propagateErrors) throw e;
-        return [];
+        return getFriendsListCacheOnly();
     }
 }
 
 export function getFriendsListCacheOnly(): any[] {
     if (!Array.isArray(friendsListCache)) return [];
     return withFriendPetView(friendsListCache);
+}
+
+export function isFriendsListPartial(): boolean { return friendsListPartial; }
+
+export function getFreshConfirmedFriends(): { friends: any[]; partial: boolean } | null {
+    const cutoff = Date.now() - getFriendsListCacheTtlMs();
+    if (!friendsListCache || friendsListCacheTime <= cutoff || hasDueFriendSummary()) return null;
+    const friends = friendsListPartial
+        ? friendsListCache.filter(friend => (friendLastSeenAt.get(friend.gid) ?? 0) > cutoff)
+        : friendsListCache;
+    return { friends, partial: friendsListPartial };
 }
 
 /**
@@ -516,6 +509,9 @@ export async function getFriendLandsDetail(friendGid: number, propagateErrors: b
             summary: analyzed,
             career: await getCareerInfoOrNull(friendGid, propagateErrors),
         };
+    } catch (error) {
+        if (!entered) handleFriendAccessError(friendGid, `GID:${friendGid}`, error);
+        throw error;
     } finally {
         if (entered) await leaveFriendFarm(friendGid);
     }
@@ -535,14 +531,14 @@ export async function runBatchWithFallback(
         await batchFn(target);
         return target.length;
     } catch (error) {
-        if (propagateErrors) throw error;
+        if (propagateErrors || isInvalidFriendAccessError(error, true)) throw error;
         let ok: number = 0;
         for (const landId of target) {
             try {
                 await singleFn([landId]);
                 ok++;
             } catch (error) {
-                if (propagateErrors) throw error;
+                if (propagateErrors || isInvalidFriendAccessError(error, true)) throw error;
                 /* ignore */
             }
             await sleep(100);
@@ -592,8 +588,8 @@ async function runFarmingWithFallback(
         releaseRecentHelp(hostGid, unconfirmed);
         return batch;
     } catch (error) {
-        if (propagateErrors) throw error;
         releaseRecentHelp(hostGid, target);
+        if (propagateErrors || isInvalidFriendAccessError(error, true)) throw error;
         const outcomes: FarmingOutcome[] = [];
         for (const landId of target) {
             markRecentHelp(hostGid, [landId], 'in_flight', HELP_IN_FLIGHT_TTL_MS, snapshotKey);
@@ -604,8 +600,8 @@ async function runFarmingWithFallback(
                 else if (outcome.effect === 'confirmed') markRecentHelp(hostGid, outcome.landIds, 'confirmed', HELP_RESULT_TTL_MS, snapshotKey);
                 else releaseRecentHelp(hostGid, [landId]);
             } catch (error) {
-                if (propagateErrors) throw error;
                 releaseRecentHelp(hostGid, [landId]);
+                if (propagateErrors || isInvalidFriendAccessError(error, true)) throw error;
             }
             await sleep(100);
         }
@@ -635,12 +631,12 @@ export async function doFriendOperation(friendGid: any, opType: string, propagat
     try {
         enterReply = await enterFriendFarm(gid);
     } catch (e: any) {
-        const handled: { handled: boolean; kind: string } = handleFriendEnterError(gid, `GID:${gid}`, e);
+        const handled: { handled: boolean; kind: string } = handleFriendAccessError(gid, `GID:${gid}`, e);
         if (handled.handled && handled.kind === 'blacklist') {
             return { ok: true, opType, count: 0, message: '好友已自动加入黑名单' };
         }
         if (handled.handled && handled.kind === 'invalid_removed') {
-            return { ok: true, opType, count: 0, message: '好友 GID 已失效，已自动移出已知列表' };
+            return { ok: false, opType, count: 0, reason: handled.kind, message: '好友关系已失效，已从扫描名单移除' };
         }
         if (propagateErrors) throw e;
         return { ok: false, message: `进入好友农场失败: ${e.message}`, opType };
@@ -743,6 +739,8 @@ export async function doFriendOperation(friendGid: any, opType: string, propagat
 
         return { ok: false, opType, count: 0, message: '未知操作类型' };
     } catch (e: any) {
+        const handled = handleFriendAccessError(gid, `GID:${gid}`, e, true);
+        if (handled.handled) return { ok: false, opType, count: 0, reason: handled.kind, message: '好友关系已失效，已从扫描名单移除' };
         if (propagateErrors) throw e;
         return { ok: false, opType, count: 0, message: e.message || '操作失败' };
     } finally {
@@ -839,11 +837,10 @@ export async function visitFriend(
     try {
         enterReply = await enterFriendFarm(gid);
     } catch (e: any) {
-        const handled: { handled: boolean; kind: string } = handleFriendEnterError(gid, name, e);
-        if (handled.handled && handled.kind === 'blacklist') {
-            return { acted: false, entered: false };
-        }
-        if (handled.handled && handled.kind === 'invalid_removed') {
+        // 连接异常交给整轮巡查处理，不能当作单个好友失败后继续扫名单。
+        if (isGatewayYieldError(e) || String(e.message).includes('stage=pending')) throw e;
+        const handled: { handled: boolean; kind: string } = handleFriendAccessError(gid, name, e);
+        if (handled.handled) {
             return { acted: false, entered: false };
         }
         logWarn('好友', `进入 ${name} 农场失败: ${e.message}`, {
@@ -852,17 +849,13 @@ export async function visitFriend(
         return { acted: false, entered: false };
     }
 
-    const lands: any[] = enterReply.lands || [];
-    if (lands.length === 0) {
-        await leaveFriendFarm(gid);
-        return { acted: false, entered: true };
-    }
-
-    // 从 Enter 成功开始，无论中间哪一步抛异常，Leave 都必须配对送出：
-    // 否则服务端仍认为我们在上一家庭里，下一次 Enter 可能被拒，
-    // 进而被 handleFriendEnterError 当成「无效好友」移出列表甚至自动拉黑。
-    // doFriendOperation / probeFriendDog 早就是用 finally 收尾的，这条主路径之前漏了。
+    // 从 Enter 成功开始，无论中间哪一步抛异常，Leave 都必须配对送出（见下面的 finally）。
     try {
+        const lands: any[] = enterReply.lands || [];
+        if (lands.length === 0) {
+            return { acted: false, entered: true };
+        }
+
         const plantBlacklist: number[] = getPlantBlacklist(accountId);
         const status: AnalyzeResult = analyzeFriendLands(lands, myGid, name, { plantBlacklist });
 
@@ -920,7 +913,8 @@ export async function visitFriend(
                     const info: any = status.stealableInfo.find((x: any) => x.landId === id);
                     if (info) stolenPlants.push(info.name);
                 });
-            } catch {
+            } catch (error) {
+                if (isInvalidFriendAccessError(error, true)) throw error;
                 // 批量失败，降级为单个
                 for (const landId of targetLands) {
                     try {
@@ -928,7 +922,9 @@ export async function visitFriend(
                         ok++;
                         const info: any = status.stealableInfo.find((x: any) => x.landId === landId);
                         if (info) stolenPlants.push(info.name);
-                    } catch { /* ignore */ }
+                    } catch (error) {
+                        if (isInvalidFriendAccessError(error, true)) throw error;
+                    }
                     await randomDelay(500, 800);
                 }
             }
@@ -968,8 +964,14 @@ export async function visitFriend(
         }
 
         return { acted: actions.length > 0, entered: true };
+    } catch (error) {
+        // 进过农场之后的异常才判「好友关系是不是坏了」：这一层的错误码比 Enter 更准。
+        if (handleFriendAccessError(gid, name, error, true).handled) return { acted: false, entered: true };
+        throw error;
     } finally {
-        // 统一在 finally 里送 Leave，正常路径与异常路径都只发一次。
+        // 统一在 finally 里送 Leave，正常路径与异常路径都只发一次：
+        // 少了这次 Leave，服务端仍认为我们在上一家庭里，下一次 Enter 可能被拒，
+        // 进而被当成「无效好友」移出列表甚至自动拉黑。Leave 自身失败不影响本次结果。
         try { await leaveFriendFarm(gid); } catch { /* ignore */ }
     }
 }
@@ -977,14 +979,18 @@ export async function visitFriend(
 // ============ 缓存管理 ============
 
 export function clearFriendsListCache(): void {
+    friendsListGeneration++;
     friendsListCache = null;
     friendsListCacheTime = 0;
+    friendsListPartial = false;
+    friendLastSeenAt.clear();
     recentHelp.clear();
 }
 
 export function removeFriendFromFriendsListCache(friendGid: any): void {
     const gid: number = toNum(friendGid);
     if (!gid) return;
+    friendLastSeenAt.delete(gid);
     if (!Array.isArray(friendsListCache)) return;
     const next: any[] = friendsListCache.filter((friend: any) => toNum(friend.gid) !== gid);
     if (next.length !== friendsListCache.length) {

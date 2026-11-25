@@ -3,8 +3,8 @@ import { execFileSync } from 'node:child_process'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
 
 /**
  * 容器部署的一键更新：updater 容器 + docker-update-agent.sh。
@@ -99,10 +99,10 @@ test('后端与脚本对「请求/作业/心跳」的文件名必须完全一致
 const agentPath = fileURLToPath(new URL('../../scripts/docker-update-agent.sh', import.meta.url))
 let shellMissing = false
 try {
-    execFileSync('sh', ['-c', 'exit 0'], { stdio: 'ignore' })
+  execFileSync('sh', ['-c', 'exit 0'], { stdio: 'ignore' })
 }
 catch {
-    shellMissing = true
+  shellMissing = true
 }
 const skipShell = shellMissing ? '当前环境没有 POSIX sh，跳过真跑' : false
 

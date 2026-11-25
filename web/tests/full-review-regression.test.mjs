@@ -15,10 +15,12 @@ test('日志轮询与实时推送都有账号 / 序号守卫', () => {
   assert.match(status, /statusGuard/, '前几轮的 status 守卫仍在')
 })
 
-test('好友 / 缓存 / 访客记录 / 黑名单四个 fetch 全部加序号守卫', () => {
+test('好友 / 缓存 / 访客记录 / 黑名单四个 fetch 全部走统一请求守卫', () => {
   const friend = read('stores/friend.ts')
-  assert.match(friend, /const friendListGuard = createRequestGuard\(\)/)
-  assert.equal((friend.match(/const ticket = friendListGuard\.next\(\)/g) || []).length, 4)
+  // 守卫绑定当前账号：切号后即使票号没被顶掉，账号快照不一致也算过期。
+  assert.match(friend, /const friendListGuard = createRequestGuard\(\{ accountId: \(\) => accountStore\.currentAccountId \}\)/)
+  assert.ok((friend.match(/friendListGuard\.next\(/g) || []).length >= 3, '主动拉取要取新票')
+  assert.match(friend, /friendListGuard\.snapshot\(/, '缓存回读只取当前票据，不能再顶掉在途请求')
   assert.ok((friend.match(/friendListGuard\.isStale\(ticket\)/g) || []).length >= 4)
   assert.match(friend, /friendListGuard\.invalidate\(\)/, 'resetFriendLandState 要作废在途请求')
   assert.match(friend, /friends\.value = \[\]/)

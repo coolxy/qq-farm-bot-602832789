@@ -10,7 +10,7 @@ const { isAutomationOn, getConfigSnapshot, getUserState, getFriendBlacklist } = 
 const { isConnected } = require('../../utils/network');
 const { log, logWarn, randomDelay, toNum, getSystemDateKey } = require('../../utils/utils');
 const { enterFriendFarm, leaveFriendFarm, getAllFriends, putSocialItem } = require('./api');
-const { analyzeFriendLands, inFriendQuietHours, handleFriendEnterError } = require('./visit-strategy');
+const { analyzeFriendLands, inFriendQuietHours, handleFriendAccessError } = require('./visit-strategy');
 const { extractReplyFriends } = require('./gid-manager');
 const { updateOperationLimits } = require('./scheduler');
 const { recordOperation } = require('../stats');
@@ -119,7 +119,8 @@ async function runGoldenBugPlacement(options: { force?: boolean } = {}): Promise
                     }
                 }
             } catch (err: any) {
-                handleFriendEnterError(friend.gid, friend.name || `GID:${friend.gid}`, err);
+                // 进过农场，按「已在场内」的口径判错误码：好友关系坏了才移出名单。
+                handleFriendAccessError(friend.gid, friend.name || `GID:${friend.gid}`, err, entered);
             } finally {
                 if (entered) {
                     try { await leaveFriendFarm(friend.gid); } catch { /* ignore */ }

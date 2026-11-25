@@ -167,6 +167,45 @@ export interface FriendQuietHoursConfig {
   continueFarm?: boolean
 }
 
+export interface PushChannelOption {
+  label: string
+  value: string
+  docUrl: string
+}
+
+export const PUSH_CHANNEL_OPTIONS: PushChannelOption[] = [
+  { label: 'Webhook(自定义接口)', value: 'webhook', docUrl: '' },
+  { label: 'Qmsg 酱', value: 'qmsg', docUrl: 'https://qmsg.zendee.cn/' },
+  { label: 'Server 酱', value: 'serverchan', docUrl: 'https://sct.ftqq.com/' },
+  { label: 'Push Plus', value: 'pushplus', docUrl: 'https://www.pushplus.plus/' },
+  { label: 'Push Plus Hxtrip', value: 'pushplushxtrip', docUrl: 'https://pushplus.hxtrip.com/' },
+  { label: '钉钉', value: 'dingtalk', docUrl: 'https://open.dingtalk.com/document/orgapp/customize-robot-security-settings' },
+  { label: '企业微信', value: 'wecom', docUrl: 'https://guole.fun/posts/626/' },
+  { label: 'Bark', value: 'bark', docUrl: 'https://github.com/Finb/Bark' },
+  { label: 'Go-cqhttp', value: 'gocqhttp', docUrl: 'https://docs.go-cqhttp.org/api/' },
+  { label: 'OneBot', value: 'onebot', docUrl: 'https://docs.go-cqhttp.org/api/' },
+  { label: 'Atri', value: 'atri', docUrl: 'https://blog.tianli0.top/' },
+  { label: 'PushDeer', value: 'pushdeer', docUrl: 'https://www.pushdeer.com/' },
+  { label: 'iGot', value: 'igot', docUrl: 'https://push.hellyw.com/' },
+  { label: 'Telegram', value: 'telegram', docUrl: 'https://core.telegram.org/bots' },
+  { label: '飞书', value: 'feishu', docUrl: 'https://www.feishu.cn/hc/zh-CN/articles/360024984973' },
+  { label: 'IFTTT', value: 'ifttt', docUrl: 'https://ifttt.com/maker_webhooks' },
+  { label: '企业微信群机器人', value: 'wecombot', docUrl: 'https://developer.work.weixin.qq.com/document/path/91770' },
+  { label: 'Discord', value: 'discord', docUrl: 'https://discord.com/developers/docs/resources/webhook#execute-webhook' },
+  { label: 'WxPusher', value: 'wxpusher', docUrl: 'https://wxpusher.zjiecode.com/docs/#/' },
+  { label: 'MeoW', value: 'meow', docUrl: 'https://www.chuckfang.com/MeoW/api_doc.html' },
+]
+
+export interface OfflineChannelConfig {
+  channel: string
+  enabled: boolean
+  endpoint: string
+  token: string
+  secret: string
+}
+
+export type PushChannelChange = Pick<OfflineChannelConfig, 'channel' | 'enabled'> & Partial<OfflineChannelConfig>
+
 export interface OfflineConfig {
   templates?: import('@/utils/notification-template').NotificationTemplates
   events?: Record<'account_offline' | 'friend_crop_forecast' | 'friend_crop_mature', string[]>
@@ -183,10 +222,16 @@ export interface OfflineConfig {
   senderName?: string
   recipientEmail?: string
   emailContent?: string
+  notificationTypes?: {
+    offline: boolean
+    mysteryArrival: boolean
+    mysteryPurchase: boolean
+  }
   channel: string
   endpoint: string
   token: string
   secret?: string
+  channels: OfflineChannelConfig[]
   title: string
   msg: string
   offlineDeleteSec: number
@@ -211,6 +256,128 @@ export interface FriendMonitorConfig {
 
 export function createDefaultFriendMonitor(): FriendMonitorConfig {
   return { enabled: false, friendGids: [], barkKeys: {}, intervalMinSec: 180, intervalMaxSec: 300, leadSeconds: 120, forecastEnabled: true, matureEnabled: true, protectFriends: true }
+}
+
+const VALID_PUSH_CHANNELS = new Set(PUSH_CHANNEL_OPTIONS.map(item => item.value))
+
+export function getPushChannelLabel(channel: string): string {
+  const key = String(channel || '').trim().toLowerCase()
+  return PUSH_CHANNEL_OPTIONS.find(item => item.value === key)?.label || key || '未知渠道'
+}
+
+export function getPushChannelDocUrl(channel: string): string {
+  const key = String(channel || '').trim().toLowerCase()
+  return PUSH_CHANNEL_OPTIONS.find(item => item.value === key)?.docUrl || ''
+}
+
+export function isPushChannelConfigured(input?: Partial<OfflineChannelConfig>): boolean {
+  if (!input)
+    return false
+  const channel = String(input.channel || '').trim().toLowerCase()
+  if (!VALID_PUSH_CHANNELS.has(channel))
+    return false
+  const endpoint = String(input.endpoint || '').trim()
+  const token = String(input.token || '').trim()
+  if (channel === 'webhook')
+    return endpoint.length > 0
+  if (channel === 'dingtalk')
+    return endpoint.length > 0 || token.length > 0
+  return token.length > 0
+}
+
+export function validateDingTalkWebhook(endpointInput: string): string {
+  const endpoint = String(endpointInput || '').trim()
+  if (!endpoint)
+    return '请填写钉钉机器人设置页提供的完整 Webhook 地址'
+  try {
+    const url = new URL(endpoint)
+    const isOfficialWebhook = url.protocol === 'https:'
+      && url.hostname.toLowerCase() === 'oapi.dingtalk.com'
+      && url.pathname === '/robot/send'
+      && !!url.searchParams.get('access_token')
+    if (!isOfficialWebhook)
+      return '钉钉 Webhook 地址格式不正确，请从群机器人设置页重新复制'
+  }
+  catch {
+    return '钉钉 Webhook 地址格式不正确，请从群机器人设置页重新复制'
+  }
+  return ''
+}
+
+export function normalizeChannelEntry(raw: Partial<OfflineChannelConfig> | null | undefined): OfflineChannelConfig | null {
+  if (!raw || typeof raw !== 'object')
+    return null
+  const channel = String(raw.channel || '').trim().toLowerCase()
+  if (!VALID_PUSH_CHANNELS.has(channel))
+    return null
+  let endpoint = String(raw.endpoint || '').trim()
+  let token = String(raw.token || '').trim()
+  const secret = String(raw.secret || '').trim()
+
+  if (channel === 'dingtalk') {
+    if (!endpoint && token) {
+      endpoint = /^https?:\/\//i.test(token)
+        ? token
+        : `https://oapi.dingtalk.com/robot/send?access_token=${encodeURIComponent(token)}`
+    }
+    token = ''
+  }
+
+  const configured = isPushChannelConfigured({ channel, endpoint, token })
+  if (!configured && !endpoint && !token && !secret)
+    return null
+
+  return {
+    channel,
+    enabled: raw.enabled === true && configured,
+    endpoint,
+    token,
+    secret,
+  }
+}
+
+/**
+ * 兼容上游命名：以本地这套更全的归一化（模板 / 邮件 / Bark / 好友监控字段）为底，
+ * 再叠一层多渠道路由——channels 归一后回填主渠道字段，旧的单渠道字段继续可用。
+ */
+export function normalizeOfflineConfig(config?: Partial<OfflineConfig>): OfflineConfig {
+  const base = normalizeOfflineReminder(config)
+  const hasExplicitChannels = Array.isArray(config?.channels)
+  const channels: OfflineChannelConfig[] = []
+  if (hasExplicitChannels) {
+    const map = new Map<string, OfflineChannelConfig>()
+    for (const item of config!.channels!) {
+      const normalized = normalizeChannelEntry(item)
+      if (!normalized)
+        continue
+      // 同渠道只保留最后一条，保持配置里后写的覆盖先写的。
+      map.delete(normalized.channel)
+      map.set(normalized.channel, normalized)
+    }
+    channels.push(...map.values())
+  }
+  else {
+    const migrated = normalizeChannelEntry({
+      channel: base.channel,
+      endpoint: base.endpoint,
+      token: base.token,
+      secret: base.secret,
+      enabled: true,
+    })
+    if (migrated && isPushChannelConfigured(migrated))
+      channels.push(migrated)
+  }
+
+  const primary = channels.find(c => c.enabled)
+  return {
+    ...base,
+    channel: primary ? primary.channel : (hasExplicitChannels ? 'webhook' : base.channel),
+    endpoint: primary ? primary.endpoint : (hasExplicitChannels ? '' : base.endpoint),
+    token: primary ? primary.token : (hasExplicitChannels ? '' : base.token),
+    secret: primary ? primary.secret : (hasExplicitChannels ? '' : base.secret),
+    channels,
+    notificationTypes: config?.notificationTypes ? { ...config.notificationTypes } : base.notificationTypes,
+  }
 }
 
 export interface UIConfig {
@@ -341,6 +508,9 @@ export function createDefaultOfflineReminder(): OfflineConfig {
     senderName: '',
     recipientEmail: '',
     emailContent: '',
+    // 多渠道：旧配置只有单组 channel/endpoint/token，读盘时由 normalizeOfflineConfig 迁移成 channels。
+    channels: [],
+    notificationTypes: { offline: true, mysteryArrival: true, mysteryPurchase: true },
   }
 }
 
@@ -371,7 +541,7 @@ function createDefaultSettings(): SettingsState {
     autoCodeRefresh: { offlineEnabled: true, offlineDelaySeconds: 60 },
     friendMonitor: createDefaultFriendMonitor(),
     ui: {},
-    offlineReminder: createDefaultOfflineReminder(),
+    offlineReminder: normalizeOfflineConfig(),
     stealDelaySeconds: 0,
     plantOrderRandom: false,
     plantDelaySeconds: 0,
@@ -399,6 +569,7 @@ function cloneValue<T>(value: T): T {
 
 export const useSettingStore = defineStore('setting', () => {
   const settings = ref<SettingsState>(createDefaultSettings())
+  const supportsPushChannels = ref<boolean | null>(null)
   const loading = ref(false)
   const loadedAccountId = ref('')
   let pendingRequests = 0
@@ -417,6 +588,7 @@ export const useSettingStore = defineStore('setting', () => {
   }
 
   function applyFetchedSettings(data: any) {
+    supportsPushChannels.value = Array.isArray(data.offlineReminder?.channels)
     const defaults = createDefaultSettings()
     settings.value = {
       plantingStrategy: data.strategy || defaults.plantingStrategy,
@@ -435,7 +607,7 @@ export const useSettingStore = defineStore('setting', () => {
       autoCodeRefresh: { ...defaults.autoCodeRefresh, ...(cloneValue(data.autoCodeRefresh) || {}) },
       friendMonitor: { ...defaults.friendMonitor, ...(cloneValue(data.friendMonitor) || {}) },
       ui: cloneValue(data.ui || defaults.ui),
-      offlineReminder: normalizeOfflineReminder(cloneValue(data.offlineReminder)),
+      offlineReminder: normalizeOfflineConfig(data.offlineReminder),
       stealDelaySeconds: data.stealDelaySeconds ?? defaults.stealDelaySeconds,
       plantOrderRandom: data.plantOrderRandom ?? defaults.plantOrderRandom,
       plantDelaySeconds: data.plantDelaySeconds ?? defaults.plantDelaySeconds,
@@ -473,6 +645,7 @@ export const useSettingStore = defineStore('setting', () => {
   async function fetchSettings(accountId: string) {
     if (!accountId)
       return false
+    // 账号切换由 request-guard 统一判新旧：同一账号连续两次请求也按序号取最后一次。
     const ticket = fetchGuard.next(accountId)
     latestRequestedAccountId = accountId
     loadedAccountId.value = ''
@@ -557,23 +730,29 @@ export const useSettingStore = defineStore('setting', () => {
     }
   }
 
-  async function saveOfflineConfig(config: OfflineConfig) {
+  async function saveOfflineConfig(config: Partial<OfflineConfig> & { enabled?: boolean }) {
     beginRequest()
     try {
-      const { data } = await api.post('/api/settings/offline-reminder', config)
+      let payload = cloneValue(config)
+      if (supportsPushChannels.value === false && config.enabled !== undefined) {
+        const { channel = 'webhook', endpoint = '', token = '', secret = '' } = config
+        payload = config.enabled ? { channel, endpoint, token, secret } : { channel: 'webhook', endpoint: '', token: '', secret: '' }
+      }
+      const { data } = await api.post('/api/settings/offline-reminder', payload)
       if (data && data.ok) {
-        settings.value.offlineReminder = cloneValue(config)
+        supportsPushChannels.value = Array.isArray(data.data?.channels)
+        settings.value.offlineReminder = normalizeOfflineConfig(data.data)
         return { ok: true }
       }
       return { ok: false, error: '保存失败' }
     }
     catch (error: any) {
-      return { ok: false, error: getApiErrorMessage(error, '保存失败') }
+      return { ok: false, error: error?.response?.data?.error || error?.message || '保存失败' }
     }
     finally {
       endRequest()
     }
   }
 
-  return { settings, loading, loadedAccountId, fetchSettings, saveSettings, saveOfflineConfig }
+  return { settings, loading, loadedAccountId, supportsPushChannels, fetchSettings, saveSettings, saveOfflineConfig }
 })

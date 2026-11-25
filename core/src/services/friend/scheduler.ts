@@ -36,6 +36,7 @@ const {
 } = require('./application-filter');
 const {
     extractReplyFriends,
+    canScanFriend,
     clearAllInvalidKnownFriendGidCooldowns,
 } = require('./gid-manager');
 const {
@@ -447,7 +448,7 @@ export async function checkFriends(options: CheckFriendsOptions = {}): Promise<b
                 // 单次访问用独立入队：等待间隔时不会把整条自动化锁占住，
                 // 农场巡查和心跳才不会被拖住。
                 await runExclusiveAutomationTask('friend_visit', async () => {
-                    if (!canContinue() || getFriendBlacklist(accountId).includes(target.gid)) return;
+                    if (!canContinue() || !canScanFriend(target.gid) || getFriendBlacklist(accountId).includes(target.gid)) return;
                     // 入队到真正执行之间可能又过了一段时间，这里按分项再实时读一次；
                     // 定向模式由 isLiveFriendOp 内部的 onlyXxx 豁免全局开关。
                     const allowSteal = target.wantSteal && isLiveFriendOp('steal');

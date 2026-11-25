@@ -15,6 +15,7 @@
  */
 
 const assert = require('node:assert/strict');
+const { EventEmitter } = require('node:events');
 const test = require('node:test');
 
 const Long = require('long');
@@ -69,9 +70,14 @@ class GatewayError extends Error {
 
 const sentBatches = [];
 let failBatchIndex = -1;
+const networkEvents = new EventEmitter();
 require.cache[require.resolve('../dist/utils/network')] = {
     exports: {
         GatewayError,
+        networkEvents,
+        // 自己的 gid 固定成 10001：名单里要能看出「把自己过滤掉」这条规则。
+        getUserState: () => ({ gid: 10001 }),
+        getGatewayLoad: () => ({}),
         sendMsgAsync: async (_service, _method, body) => {
             const index = sentBatches.length;
             sentBatches.push(body);
@@ -108,7 +114,6 @@ function reset() {
     failBatchIndex = -1;
     replyByBatch = () => [];
     gidManager.clearAllInvalidKnownFriendGidCooldowns();
-    gidManager.clearInvalidKnownFriendGidMarks([]);
 }
 
 // ============ 归一化 ============
@@ -194,15 +199,15 @@ test('失效标记不接受 Infinity / 0 / 非数字，避免留下永不过期�
     assert.deepEqual([...gidManager.getInvalidKnownFriendGidSet(now)], [], '非法 gid 不该被记录');
 });
 
-test('clearInvalidKnownFriendGidMarks 只解除指定 gid 的冷却', () => {
+test('clearAllInvalidKnownFriendGidCooldowns 清空全部冷却标记', () => {
     reset();
     const now = 1_700_000_000_000;
     gidManager.markKnownFriendGidInvalid(1, now);
     gidManager.markKnownFriendGidInvalid(2, now);
 
-    gidManager.clearInvalidKnownFriendGidMarks([1]);
+    gidManager.clearAllInvalidKnownFriendGidCooldowns();
 
-    assert.deepEqual([...gidManager.getInvalidKnownFriendGidSet(now)].sort(), [2]);
+    assert.deepEqual([...gidManager.getInvalidKnownFriendGidSet(now)], []);
 });
 
 // ============ 有效好友列表 ============
@@ -292,35 +297,62 @@ test('最近访客接口失败时回落到本地已知列表，不抛错', async
 
 // ============ 分批拉取好友 ============
 
-test('分批拉取按 35 个一组，并跨批去重', async () => {
+test('分批拉取按 35 个一组，只收请求过的 gid', async () => {
     reset();
     knownGids = Array.from({ length: 40 }, (_, index) => index + 1);
-    // 每批都返回同一个 gid，验证跨批去重
-    replyByBatch = () => [{ gid: 999, name: '跨批重复' }];
+    // 每批除了本批的 35/5 位，还多塞一条不相干的 gid：它不在请求集合里，必须被丢掉。
+    replyByBatch = batchIndex => (batchIndex === 0
+        ? [...Array.from({ length: 35 }, (_, i) => ({ gid: i + 1, name: `A${i + 1}` })), { gid: 999, name: '串号' }]
+        : [...Array.from({ length: 5 }, (_, i) => ({ gid: 36 + i, name: `A${36 + i}` })), { gid: 999, name: '串号' }]);
 
-    const friends = await gidManager.fetchQqFriendsByKnownGids();
+    const { friends, partial } = await gidManager.fetchQqFriendsByKnownGids();
 
     assert.equal(sentBatches.length, 2, '40 个 gid 应该分成 35 + 5 两批');
-    assert.deepEqual(friends.map(friend => friend.gid), [999], '两批返回同一 gid 时只保留一条');
+    assert.equal(friends.length, 40, '两批各回各自的 gid，去重后是 40 位');
+    assert.equal(friends.filter(friend => friend.gid === 999).length, 0, '不在请求集合里的 gid 一条都不能收');
+    assert.equal(partial, false, '名单齐了就不该标 partial');
+});
+
+test('回包里不在本批请求内的 gid 会被丢弃', async () => {
+    reset();
+    knownGids = [1, 2, 3];
+    // 只请求了 1/2/3，回包却带上 888：多出来的不能混进名单。
+    replyByBatch = () => [{ gid: 1, name: 'A1' }, { gid: 888, name: '串号' }];
+
+    const { friends, partial } = await gidManager.fetchQqFriendsByKnownGids();
+
+    assert.deepEqual(friends.map(friend => friend.gid), [1]);
+    assert.equal(partial, true, '2/3 没回包，名单不完整');
 });
 
 test('单批失败不中断其余批次', async () => {
     reset();
     knownGids = Array.from({ length: 40 }, (_, index) => index + 1);
     failBatchIndex = 0;
-    replyByBatch = batchIndex => (batchIndex === 1 ? [{ gid: 777, name: '第二批' }] : []);
+    replyByBatch = batchIndex => (batchIndex === 1
+        ? Array.from({ length: 5 }, (_, i) => ({ gid: 36 + i, name: `第二批${i + 1}` }))
+        : []);
 
-    const friends = await gidManager.fetchQqFriendsByKnownGids();
+    const { friends, partial } = await gidManager.fetchQqFriendsByKnownGids();
 
-    assert.deepEqual(friends.map(friend => friend.gid), [777], '第一批失败也要拿到第二批结果');
+    assert.deepEqual(friends.map(friend => friend.gid), [36, 37, 38, 39, 40], '第一批失败也要拿到第二批结果');
     assert.equal(sentBatches.length, 2);
+    assert.equal(partial, true, '有批次失败就是 partial');
 });
 
 test('没有任何已知 gid 时不发请求', async () => {
     reset();
-    const friends = await gidManager.fetchQqFriendsByKnownGids();
+    const { friends, partial } = await gidManager.fetchQqFriendsByKnownGids();
     assert.deepEqual(friends, []);
+    assert.equal(partial, false, '没有好友时不算名单不完整');
     assert.equal(sentBatches.length, 0);
+});
+
+test('自己不会出现在有效好友名单里', () => {
+    reset();
+    knownGids = [10001, 101];
+
+    assert.deepEqual(gidManager.getEffectiveKnownQqFriendGids(), [101]);
 });
 
 // ============ 移除失效好友 ============
