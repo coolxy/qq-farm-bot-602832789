@@ -531,7 +531,11 @@ function cloneAccountConfig(base: Partial<AccountConfig> = DEFAULT_ACCOUNT_CONFI
         }
         // "HH:MM" 是字符串项，不显式归一就会被当普通值透传，界面输错就永久不卖。
         if (key === 'yishu_sell_after_time') {
-            (automation as any)[key] = normalizeSellAfterTime(srcAutomation[key]);
+            // 只有「配置里确实没有这个键」才用默认值；显式存了空串表示「不限时段」，
+            // 不能反过来被默认值覆盖——否则用户选了「留空」下次开机会又变回 23:00。
+            (automation as any)[key] = srcAutomation[key] === undefined
+                ? DEFAULT_ACCOUNT_CONFIG.automation.yishu_sell_after_time
+                : normalizeSellAfterTime(srcAutomation[key]);
             continue;
         }
         if (srcAutomation[key] !== undefined) (automation as any)[key] = (srcAutomation as any)[key];

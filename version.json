@@ -1,12 +1,20 @@
 {
   "major": 3,
   "minor": 39,
-  "patch": 11,
-  "build": 278,
-  "version": "3.39.11",
-  "updatedAt": "2026-11-25T22:06:47.332Z",
+  "patch": 12,
+  "build": 279,
+  "version": "3.39.12",
+  "updatedAt": "2026-11-25T22:22:29.998Z",
   "lastCommit": "—",
   "history": [
+    {
+      "version": "3.39.12",
+      "build": 279,
+      "date": "2026-11-26",
+      "summary": "修复「出售时间」默认值被归一化吞掉",
+      "commit": "—",
+      "type": "patch"
+    },
     {
       "version": "3.39.11",
       "build": 278,
