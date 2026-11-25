@@ -3,9 +3,11 @@ import type { AdminContext } from './context';
 export {};
 
 const { version } = require('../../../package.json');
+const path = require('node:path');
 const { getRuntimeConfig } = require('../../config/config');
 const { getSchedulerRegistrySnapshot } = require('../../services/scheduler');
 const { createModuleLogger } = require('../../services/logger');
+const { readRepoVersion } = require('../../services/web-build-info');
 const adminStore = require('../../models/admin-store');
 
 const {
@@ -65,12 +67,37 @@ function mountAuthRoutes(app: Application, ctx: AdminContext): void {
     });
 
     app.use('/api', (req: Request, res: Response, next: any) => {
-        if (req.path === '/login' || req.path === '/game-version') return next();
+        if (req.path === '/login' || req.path === '/game-version' || req.path === '/version') return next();
         return authRequired(req, res, next);
     });
 
     app.get('/api/ping', (_req: Request, res: Response) => {
         res.json({ ok: true, data: { ok: true, uptime: process.uptime(), version } });
+    });
+
+    /**
+     * 面板版本号：读仓库根 `version.json`，**不信构建期常量**。
+     *
+     * 侧边栏原来用的是 vite `define` 烘焙进去的 `__APP_VERSION_LABEL__`，只有
+     * `pnpm build:web` 才会变。提交钩子 bump 版本号之后不重建前端，面板就永远停在旧版本，
+     * 让人误以为改动没生效。这里做成接口后，刷新页面即可同步，和前端有没有重建无关。
+     *
+     * 候选目录按「源码部署 → 容器」的顺序试：容器里没有 `.git`，光靠向上找 git 根
+     * 会落到 `core/` 上读不到文件；两个候选里谁先读到 version.json 就用谁。
+     */
+    app.get('/api/version', (_req: Request, res: Response) => {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        const candidates = [
+            process.env.FARM_REPO_ROOT,
+            path.join(__dirname, '..', '..', '..', '..'),
+            path.join(__dirname, '..', '..'),
+        ].filter(Boolean) as string[];
+        let info = null;
+        for (const dir of candidates) {
+            info = readRepoVersion(dir);
+            if (info) break;
+        }
+        res.json({ ok: true, data: info || { version: '', build: 0, label: '', updatedAt: '' } });
     });
 
     app.get('/api/game-version', (_req: Request, res: Response) => {

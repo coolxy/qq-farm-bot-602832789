@@ -285,6 +285,9 @@ function activityDisplayName(activity: ActivityDirectoryItemDto) {
 function activityIconSrc(activity: ActivityDirectoryItemDto) {
   if (activity.gameplayKey === 'muge')
     return '/activity-assets/muge/icon.png'
+  // 以薯换福与详情页共用同一张图标，避免目录卡片和活动页头图形不一致。
+  if (activity.gameplayKey === 'sweetPotato')
+    return '/activity-assets/sweet-potato/icon.png'
   if (activity.activityIds.some(id => ['2026111800', '2026111801'].includes(id)))
     return '/activity-assets/friend-recall/icon.png'
   if (activity.gameplayKey === 'pet')

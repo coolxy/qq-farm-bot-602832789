@@ -330,6 +330,13 @@ function createSweetPotatoService(deps: any) {
             balanceError: balancesKnown ? '' : (lastBalanceError || '背包读取失败'),
             shopAvailable: catalogAvailable,
             catalogAvailable,
+            // 面板资源条要显示道具图标：DTO 里只给数量的话前端只能留空，
+            // 图标本身来自道具表，统一在这里按 itemId 生成，前端不再硬编码资源路径。
+            icons: {
+                seed: String(itemDto({ item_id: SWEET_POTATO.seedId, count: 1 })?.image || ''),
+                sweetPotato: String(itemDto({ item_id: SWEET_POTATO.honeyId, count: 1 })?.image || ''),
+                luckCoin: String(itemDto({ item_id: SWEET_POTATO.coinId, count: 1 })?.image || ''),
+            },
             rules: rulesOf(data.entry),
             actions: {
                 claim: { enabled: !state.claims?.seed_claimed, available: !state.claims?.seed_claimed },
@@ -1170,7 +1177,10 @@ function createSweetPotatoService(deps: any) {
         if (!await isActiveCached()) return [];
         const bag = await inventory().catch(() => null);
         if (!bag?.seeds) return [];
-        const plantSeeds = deps.plantSeeds || require('./farm/planting').plantSeeds;
+        // 本文件在 services/activity-center/ 子目录，farm 模块在 services/farm/：
+        // 写成 './farm/planting' 会解析到不存在的 services/activity-center/farm/planting，
+        // 只在真正补种时抛 MODULE_NOT_FOUND（正是「红薯补种暂停」那条日志）。
+        const plantSeeds = deps.plantSeeds || require('../farm/planting').plantSeeds;
         const planted: number[] = [];
         const count = Math.min(landIds.length, bag.seeds);
         for (const landId of landIds.slice(0, count)) {
@@ -1192,8 +1202,8 @@ function createSweetPotatoService(deps: any) {
     /** 一轮作物循环：收成熟红薯 → 铲死苗 → 空地补种。 */
     async function runCropCycle(): Promise<number> {
         if (!alive() || !enabled('plant')) return 0;
-        const farm = deps.farm || require('./farm/api');
-        const analyzeLands = deps.analyzeLands || require('./farm/land-analysis').analyzeLands;
+        const farm = deps.farm || require('../farm/api');
+        const analyzeLands = deps.analyzeLands || require('../farm/land-analysis').analyzeLands;
         let lands = (await farm.getAllLands())?.lands || [];
         const status = analyzeLands(lands);
         const ownEventIds = new Set(lands

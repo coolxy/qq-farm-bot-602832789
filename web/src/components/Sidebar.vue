@@ -195,7 +195,26 @@ watch(sidebarOpen, async (open) => {
 })
 watch(desktop, () => appStore.closeSidebar())
 
-const versionLabel = __APP_VERSION_LABEL__
+/**
+ * 面板版本号：构建期常量只作首屏兜底，拿到 `/api/version` 后以服务端为准。
+ *
+ * `__APP_VERSION_LABEL__` 是 vite `define` 烘焙进来的，只有 `pnpm build:web` 才会变；
+ * 而提交钩子每次提交都会 bump 版本号。只显示构建常量的话，改完代码提交、后端也重启了，
+ * 面板上还挂着旧版本号，看着像改动没生效——所以运行时再问一次服务端。
+ */
+const versionLabel = ref(__APP_VERSION_LABEL__)
+
+async function loadVersionLabel() {
+  try {
+    const res = await api.get('/api/version')
+    const label = String(res.data?.data?.label || '').trim()
+    if (label) versionLabel.value = label
+  }
+  catch {
+    // 服务暂时不可达就保持构建期常量，不要因此把版本号整行清空。
+  }
+}
+onMounted(() => { void loadVersionLabel() })
 
 watch(
   () => route.path,

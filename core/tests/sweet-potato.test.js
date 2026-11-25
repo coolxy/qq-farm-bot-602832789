@@ -934,3 +934,86 @@ test('sweet potato: 分享成功后同一天不会再发第二次 cmd 98', async
     assert.match(again.message, /已触发/);
     assert.equal(countShare(), 1);
 });
+
+test('sweet potato 补种: farm/planting 懒加载路径可从子目录解析', async () => {
+    const types = await loadTypes();
+    const calls = [];
+    const plantingPath = require.resolve('../dist/services/farm/planting');
+    const cachedBefore = require.cache[plantingPath];
+    // 用假实现顶掉真实 planting：命中缓存说明 `require('../farm/planting')` 解析正确。
+    // 写成 './farm/planting' 会去找 services/activity-center/farm/planting（不存在），
+    // 直接 MODULE_NOT_FOUND——线上那句「红薯补种暂停：Cannot find module './farm/planting'」
+    // 就是这么来的，而且只在真正有空地要补种时才炸。
+    require.cache[plantingPath] = {
+        id: plantingPath,
+        filename: plantingPath,
+        loaded: true,
+        exports: { plantSeeds: async () => ({ plantedLandIds: [101] }) },
+    };
+    try {
+        const service = createSweetPotatoService(buildDeps({ types, calls }));
+        const planted = await service.plantEmptyLands([101], { canContinue: () => true });
+        assert.deepEqual(planted, [101], '补种应真正走到 plantSeeds 并确认落地');
+    }
+    finally {
+        if (cachedBefore) require.cache[plantingPath] = cachedBefore;
+        else delete require.cache[plantingPath];
+    }
+});
+
+test('sweet potato 巡田: farm/api 与 land-analysis 的懒加载路径同样可解析', async () => {
+    const types = await loadTypes();
+    const apiPath = require.resolve('../dist/services/farm/api');
+    const analysisPath = require.resolve('../dist/services/farm/land-analysis');
+    const beforeApi = require.cache[apiPath];
+    const beforeAnalysis = require.cache[analysisPath];
+    // 两块地：101 空地（该补种），102 长着红薯且已成熟（该收）。
+    const lands = () => [
+        { id: 101, plant: null },
+        { id: 102, plant: { id: 1020307, phase: 3 } },
+    ];
+    const harvestCalls = [];
+    require.cache[apiPath] = {
+        id: apiPath,
+        filename: apiPath,
+        loaded: true,
+        exports: {
+            getAllLands: async () => ({ lands: lands() }),
+            harvest: async (ids) => {
+                harvestCalls.push(ids);
+                return { land: ids.map(id => ({ id })) };
+            },
+            removePlant: async () => ({}),
+        },
+    };
+    require.cache[analysisPath] = {
+        id: analysisPath,
+        filename: analysisPath,
+        loaded: true,
+        exports: {
+            analyzeLands: () => ({ harvestable: [102], dead: [], empty: [101] }),
+        },
+    };
+    const plantingPath = require.resolve('../dist/services/farm/planting');
+    const beforePlanting = require.cache[plantingPath];
+    require.cache[plantingPath] = {
+        id: plantingPath,
+        filename: plantingPath,
+        loaded: true,
+        exports: { plantSeeds: async () => ({ plantedLandIds: [101] }) },
+    };
+    try {
+        const service = createSweetPotatoService(buildDeps({ types, calls: [] }));
+        const changed = await service.runCropCycle();
+        assert.deepEqual(harvestCalls, [[102]], '成熟红薯要收');
+        assert.equal(changed, 2, '收 1 块 + 补 1 块');
+    }
+    finally {
+        if (beforeApi) require.cache[apiPath] = beforeApi;
+        else delete require.cache[apiPath];
+        if (beforeAnalysis) require.cache[analysisPath] = beforeAnalysis;
+        else delete require.cache[analysisPath];
+        if (beforePlanting) require.cache[plantingPath] = beforePlanting;
+        else delete require.cache[plantingPath];
+    }
+});

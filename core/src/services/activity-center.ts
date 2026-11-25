@@ -428,6 +428,12 @@ const sweetPotatoService = createSweetPotatoService({
     // 显式注入，别让 selfGid() 走懒加载 require —— 那层路径在子目录里极易写错，
     // 而且一旦写错只会在调用时才抛 MODULE_NOT_FOUND，主流程很难提前发现。
     getUserState,
+    // 补种/巡田的三个 farm 依赖同样显式注入。同类事故已经踩过两次（selfGid、friendsOf），
+    // 这里用 getter 惰性 require：farm/planting.ts 里又有对 activity-center 的反向懒加载，
+    // 顶层立即 require 会把加载顺序绑死，getter 只在实际补种时才触发。
+    get plantSeeds() { return require('./farm/planting').plantSeeds; },
+    get farm() { return require('./farm/api'); },
+    get analyzeLands() { return require('./farm/land-analysis').analyzeLands; },
 });
 
 async function buildActivityCenterSnapshot(shopOverride: any = null) {
