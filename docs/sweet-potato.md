@@ -103,6 +103,8 @@ selector 是 oneof，字段号与 cmd 必须成对出现：只写 cmd 不带 sel
 
 第 2/3 步整段是「尽力而为」：抛异常或 `can_share=false` 都只记 `shareReportError`，不阻断主流程，接口把 `shareReported` / `shareReportError` 一起透给前端，面板用警示样式提示「铺子已分享，但暴击上报未确认」。只有第 4 步确认不了才按 `SWEET_POTATO_RESULT_UNKNOWN` 处理。
 
+「今天已经分享过」的判据是 `claims.share_claimed`（服务端权威），本地按服务器日期另记一份兜底。两者任一成立就返回「已触发」，**不会**因为上报失败或确认超时在冷却结束后重发 cmd 98。
+
 cmd 98 回包（`SweetPotatoShareReply`）字段号按 li 版对齐：`grant{1:item_id,2:count}` / `price=2` / `field_3` / `shop=4{share_key=2}` / `field_5` / `field_6`。旧版本把 2/3 写成了 `bonus_price`/`price`、4 号当 `bytes` 分享凭证，因为从没读过所以一直没暴露。
 
 ## 收购提成

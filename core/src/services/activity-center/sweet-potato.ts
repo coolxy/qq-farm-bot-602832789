@@ -76,7 +76,10 @@ function createSweetPotatoService(deps: any) {
 
     /** 写操作冷却：任何「结果不明」的写都在这里挡住 5 分钟。 */
     const retryAfter = new Map<string, number>();
-    /** 分享前置已成功、但 ReportShare 还没确认的日期键；跨 tick 保持，避免重复触发前置。 */
+    /**
+     * 本地分享记账（服务器日期键）。`claims.share_claimed` 是权威判据，这一份只是兜底：
+     * 万一服务端没把标记带回来，靠它也能保证同一天不再发第二次 cmd 98。
+     */
     let pendingShareDate = '';
     /** 好友铺子价格缓存：30 秒内不重复查同一家。 */
     const shopCache = new Map<string, any>();
@@ -839,7 +842,9 @@ function createSweetPotatoService(deps: any) {
         }
 
         if (action === 'share') {
-            if (state.claims?.share_claimed && pendingShareDate !== dayKey()) {
+            // 服务端标记优先，本地记账兜底。两者都成立才算「今天已经分享过」，
+            // 否则一旦上报那一步出过岔子，冷却结束后会再发一次 cmd 98（写请求不能重发）。
+            if (state.claims?.share_claimed || pendingShareDate === dayKey()) {
                 return { changed: false, message: '今日分享暴击已触发' };
             }
             retryAfter.set(action, now() + RETRY_COOLDOWN_SEC);
@@ -877,7 +882,7 @@ function createSweetPotatoService(deps: any) {
             if (!confirmed.entry.state.claims?.share_claimed) {
                 throw businessError('SWEET_POTATO_RESULT_UNKNOWN', '分享状态未能确认，请刷新活动');
             }
-            pendingShareDate = '';
+            // 记账保留到当天结束：即使后面这段抛错，今天也不会再发一次 cmd 98。
             retryAfter.delete(action);
             invalidateBalanceCache();
             const bonusPrice = int64Number(confirmed.entry.state.bonus_price);
@@ -1064,7 +1069,7 @@ function createSweetPotatoService(deps: any) {
         if (!alive() || !enabled('share')) return false;
         const data = await getGroup();
         if (!data.active) return false;
-        if (data.entry.state.claims?.share_claimed && pendingShareDate !== dayKey()) return false;
+        if (data.entry.state.claims?.share_claimed || pendingShareDate === dayKey()) return false;
         const result = await mutate('share', {}, true);
         return !!result.changed;
     }

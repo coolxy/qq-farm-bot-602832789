@@ -877,3 +877,18 @@ test('sweet potato: 四个可调参数在账号配置里被显式夹取', () => 
     assert.equal(normal.sweet_potato_scan_friend_limit, 30);
     assert.equal(normal.sweet_potato_scan_interval_minutes, 45);
 });
+
+test('sweet potato: 分享成功后同一天不会再发第二次 cmd 98', async () => {
+    const types = await loadTypes();
+    const calls = [];
+    const service = createSweetPotatoService(buildDeps({ types, calls }));
+    const countShare = () => calls.filter(call => call.method === 'Operate'
+        && Number(types.SweetPotatoOperateRequest.decode(call.body).cmd) === 98).length;
+    await service.operateSweetPotato('share', {});
+    assert.equal(countShare(), 1);
+    const again = await service.operateSweetPotato('share', {});
+    // 服务端 claims.share_claimed 已是 true，本地也记了账：写请求绝不能重发。
+    assert.equal(again.changed, false);
+    assert.match(again.message, /已触发/);
+    assert.equal(countShare(), 1);
+});

@@ -1,18 +1,26 @@
 {
   "major": 3,
   "minor": 39,
-  "patch": 0,
-  "build": 267,
-  "version": "3.39.0",
-  "updatedAt": "2026-11-25T16:08:07.387Z",
-  "lastCommit": "0d2daeaa",
+  "patch": 1,
+  "build": 268,
+  "version": "3.39.1",
+  "updatedAt": "2026-11-25T16:11:50.037Z",
+  "lastCommit": "b75bb5e2",
   "history": [
+    {
+      "version": "3.39.1",
+      "build": 268,
+      "date": "2026-11-26",
+      "summary": "修复分享确认失败后冷却结束会重发 cmd 98",
+      "commit": "b75bb5e2",
+      "type": "patch"
+    },
     {
       "version": "3.39.0",
       "build": 267,
       "date": "2026-11-26",
       "summary": "移植 li 版以薯换福运行时方案，同步协议与游戏客户端版本",
-      "commit": "0d2daeaa",
+      "commit": "b75bb5e2",
       "type": "minor"
     },
     {
