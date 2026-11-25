@@ -73,3 +73,25 @@ test('前后端活动 ID、时间窗与物品 ID 完全一致', () => {
   assert.match(windows, /startMs: 1795572000 \* 1000/)
   assert.match(windows, /endMs: 1796831999 \* 1000/)
 })
+
+test('自动卖薯的可调参数前后端一致，活动页有比价与收购记录入口', () => {
+  const numeric = [
+    ['sweet_potato_scan_friend_limit', '20'],
+    ['sweet_potato_scan_interval_minutes', '30'],
+    ['sweet_potato_sell_min_count', '1'],
+  ]
+  for (const [key, fallback] of numeric) {
+    assert.ok(coreConfig.includes(key), `后端缺少 ${key}`)
+    assert.ok(windows.includes(`key: '${key}'`), `前端缺少 ${key}`)
+    assert.ok(coreConfig.includes(`${key}: ${fallback}`), `${key} 默认值与前端不一致`)
+    assert.ok(windows.includes(`fallback: ${fallback}`), `${key} 前端兜底值与后端不一致`)
+  }
+  assert.ok(coreConfig.includes('sweet_potato_sell_fallback_own: true'))
+  assert.match(settings, /v-for="field in sweetPotatoSellFields"/)
+  assert.match(settings, /v-model="automation\.automation\.sweet_potato_sell_fallback_own"/)
+  // 面板要能主动比价，也要能查看 cmd 95 的分红明细。
+  assert.match(tab, /\/api\/activity-center\/sweet-potato\/scan/)
+  assert.match(tab, /\/api\/activity-center\/sweet-potato\/records/)
+  assert.match(tab, /shopsMode\.value = 'scan'/)
+  assert.match(tab, /sp-record-commission/)
+})

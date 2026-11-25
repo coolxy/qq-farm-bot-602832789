@@ -61,7 +61,7 @@ function buildGroupReply(types, statePatch = {}) {
     });
 }
 
-function buildDeps({ types, statePatch = {}, bag = { 20307: 3, 1032: 20, 1033: 0 }, calls = [], shop = {}, catalog = null }) {
+function buildDeps({ types, statePatch = {}, bag = { 20307: 3, 1032: 20, 1033: 0 }, calls = [], shop = {}, catalog = null, records = [] }) {
     let groupReply = buildGroupReply(types, statePatch);
     const shopRemaining = shop.remaining ?? 50;
     const shopCanSell = shop.canSell;
@@ -141,6 +141,15 @@ function buildDeps({ types, statePatch = {}, bag = { 20307: 3, 1032: 20, 1033: 0
                                 coins: 100,
                             },
                             activity: { head: { id: SWEET_POTATO.activityId }, state: { claims: {}, base_price: 10, bonus_price: 2, capacity: 100 } },
+                        }),
+                    };
+                }
+                if (Number(request.cmd) === 95) {
+                    return {
+                        body: encode(types.SweetPotatoOperateReply, {
+                            id: SWEET_POTATO.activityId,
+                            cmd: 95,
+                            records: { records },
                         }),
                     };
                 }
@@ -237,6 +246,10 @@ test('sweet potato proto: 七个 selector 落在 190+cmd，cmd 与实机抓包�
     const commission = encodeRequest({ cmd: 99, claim_commission: {} });
     assert.equal(Number(commission.cmd), 99);
     assert.ok(commission.claim_commission);
+    // 收购记录 cmd 95 的空 selector 落在 195，别和兑换目录 197 混在一起。
+    const records = encodeRequest({ cmd: 95, records: {} });
+    assert.equal(Number(records.cmd), 95);
+    assert.ok(records.records);
 });
 
 test('sweet potato proto: 状态槽 11/13 与 can_sell 按 bool 解', async () => {
@@ -335,6 +348,10 @@ test('sweet potato: 活动自动化默认开启，且子开关受总开关约束
         sweet_potato_sell: true,
         sweet_potato_share: true,
         sweet_potato_commission: true,
+        sweet_potato_scan_friend_limit: 20,
+        sweet_potato_scan_interval_minutes: 30,
+        sweet_potato_sell_min_count: 1,
+        sweet_potato_sell_fallback_own: true,
     });
     assert.equal(sweetPotatoEnabled({}, 'sell'), true);
     assert.equal(sweetPotatoEnabled({ sweet_potato: false }, 'sell'), false);
@@ -466,4 +483,195 @@ test('sweet potato: 兑换按 cmd 96 下单，超限购与余额不足在本地�
         () => poor.operateSweetPotato('exchange', { index: 10, count: 1 }),
         error => error.code === 'SWEET_POTATO_INSUFFICIENT_COINS',
     );
+});
+
+/**
+ * 自动卖薯专用夹具：每个 gid 一份铺子行情，卖薯回包按该 gid 的成交价回写，
+ * 这样「回包对不上」的分支也能通过改单个 gid 的价格来触发。
+ */
+function buildAutoSellDeps({ types, quotes, bag = 20, automation = {}, calls = [], badSellGid = '' }) {
+    const groupReply = buildGroupReply(types);
+    const priceOf = gid => {
+        const quote = quotes[gid] || { base: 10, bonus: 0 };
+        return quote.base + quote.bonus;
+    };
+    return {
+        types,
+        stepSpacerMs: 0,
+        getServerTimeSec: () => ACTIVITY_START,
+        int64String: value => String(value ?? '0'),
+        int64Number: value => Number(value || 0),
+        itemDto: item => ({ id: String(item?.id || ''), count: String(item?.count || '') }),
+        businessError: (code, message) => Object.assign(new Error(message), { code }),
+        positiveDecimal: (value, code) => {
+            const text = String(value ?? '');
+            if (!/^[1-9]\d*$/.test(text)) throw Object.assign(new Error('invalid'), { code });
+            return text;
+        },
+        serializeMutation: fn => fn(),
+        getActivityCenterSnapshot: async () => ({}),
+        getAutomation: () => ({ ...SWEET_POTATO_DEFAULTS, ...automation }),
+        getUserState: () => ({ gid: 10001 }),
+        getFriends: () => Object.keys(quotes)
+            .filter(gid => gid !== '10001')
+            .map(gid => ({ gid: Number(gid), name: `好友${gid}` })),
+        getBagItems: reply => reply.item_bag?.items || [],
+        getBag: async () => ({ item_bag: { items: [{ id: SWEET_POTATO.honeyId, count: bag }] } }),
+        sendMsgAsync: async (service, method, body) => {
+            calls.push({ service, method, body: Buffer.from(body) });
+            if (method === 'GetGroup') return { body: groupReply };
+            if (method === 'Bag') return { body: Buffer.alloc(0) };
+            if (method === 'Operate') {
+                const request = types.SweetPotatoOperateRequest.decode(body);
+                const gid = String(request.get_shop?.host_gid || request.sell?.host_gid || '10001');
+                const quote = quotes[gid] || {};
+                if (Number(request.cmd) === 92) {
+                    const payload = {
+                        shop: {
+                            base_price: quote.base ?? 10,
+                            bonus_price: quote.bonus ?? 0,
+                            remaining: quote.remaining ?? 0,
+                            owner: { gid, name: `铺子${gid}` },
+                        },
+                    };
+                    if (quote.canSell !== undefined) payload.can_sell = quote.canSell;
+                    return {
+                        body: encode(types.SweetPotatoOperateReply, {
+                            id: SWEET_POTATO.activityId,
+                            cmd: 92,
+                            get_shop: payload,
+                            activity: { head: { id: SWEET_POTATO.activityId }, state: { claims: {}, base_price: 10, bonus_price: 0 } },
+                        }),
+                    };
+                }
+                if (Number(request.cmd) === 93) {
+                    const count = Number(request.sell.count);
+                    const price = priceOf(gid) + (gid === badSellGid ? 1 : 0);
+                    return {
+                        body: encode(types.SweetPotatoOperateReply, {
+                            id: SWEET_POTATO.activityId,
+                            cmd: 93,
+                            sell: { count, price, income: count * price, daily_quota: 8000 },
+                            activity: { head: { id: SWEET_POTATO.activityId }, state: { claims: {}, base_price: 10, bonus_price: 0 } },
+                        }),
+                    };
+                }
+            }
+            throw new Error(`unexpected ${service}.${method}`);
+        },
+    };
+}
+
+function sellCallsOf(types, calls) {
+    return calls
+        .filter(call => call.method === 'Operate' && Number(types.SweetPotatoOperateRequest.decode(call.body).cmd) === 93)
+        .map(call => {
+            const request = types.SweetPotatoOperateRequest.decode(call.body);
+            return { gid: String(request.sell.host_gid), count: Number(request.sell.count) };
+        });
+}
+
+test('sweet potato 比价: 按成交价降序，额度吃满换下一家，单轮最多 3 家', async () => {
+    const types = await loadTypes();
+    const calls = [];
+    const service = createSweetPotatoService(buildAutoSellDeps({
+        types,
+        calls,
+        bag: 20,
+        quotes: {
+            10001: { base: 10, bonus: 0, remaining: 0 },
+            10002: { base: 10, bonus: 5, remaining: 3 },
+            10003: { base: 10, bonus: 20, remaining: 2 },
+            10004: { base: 10, bonus: 10, remaining: 5 },
+        },
+    }));
+    assert.equal(await service.autoSell(), true);
+    // 30 > 20 > 15：前卖 2、5、3 个，剩下的 10 个留到下一轮；自家价最低且没进前三。
+    assert.deepEqual(sellCallsOf(types, calls), [
+        { gid: '10003', count: 2 },
+        { gid: '10004', count: 5 },
+        { gid: '10002', count: 3 },
+    ]);
+    const scan = await service.scanShops({ limit: 10 });
+    assert.deepEqual(scan.shops.map(shop => shop.price), [30, 20, 15, 10]);
+    assert.equal(scan.ownShop.hostGid, '10001');
+});
+
+test('sweet potato 比价: 好友都不收时兜底卖自己，关掉兜底就一笔不发', async () => {
+    const types = await loadTypes();
+    const quotes = {
+        10001: { base: 10, bonus: 2, remaining: 0 },
+        10002: { base: 10, bonus: 5, remaining: 0 },
+    };
+    const calls = [];
+    const own = createSweetPotatoService(buildAutoSellDeps({ types, calls, bag: 8, quotes }));
+    assert.equal(await own.autoSell(), true);
+    assert.deepEqual(sellCallsOf(types, calls), [{ gid: '10001', count: 8 }]);
+
+    const disabledCalls = [];
+    const disabled = createSweetPotatoService(buildAutoSellDeps({
+        types,
+        calls: disabledCalls,
+        bag: 8,
+        quotes,
+        automation: { sweet_potato_sell_fallback_own: false },
+    }));
+    assert.equal(await disabled.autoSell(), false);
+    assert.deepEqual(sellCallsOf(types, disabledCalls), []);
+});
+
+test('sweet potato 比价: 低于最低出售数量时连比价都不发', async () => {
+    const types = await loadTypes();
+    const calls = [];
+    const service = createSweetPotatoService(buildAutoSellDeps({
+        types,
+        calls,
+        bag: 3,
+        quotes: { 10001: { base: 10, bonus: 2, remaining: 50 } },
+        automation: { sweet_potato_sell_min_count: 5 },
+    }));
+    assert.equal(await service.autoSell(), false);
+    assert.equal(calls.filter(call => call.method === 'Operate').length, 0);
+});
+
+test('sweet potato 比价: 回包价格对不上就停手，不继续卖下一家', async () => {
+    const types = await loadTypes();
+    const calls = [];
+    const service = createSweetPotatoService(buildAutoSellDeps({
+        types,
+        calls,
+        bag: 20,
+        badSellGid: '10003',
+        quotes: {
+            10001: { base: 10, bonus: 0, remaining: 0 },
+            10003: { base: 10, bonus: 20, remaining: 2 },
+            10004: { base: 10, bonus: 10, remaining: 5 },
+        },
+    }));
+    assert.equal(await service.autoSell(), false);
+    assert.deepEqual(sellCallsOf(types, calls), [{ gid: '10003', count: 2 }]);
+});
+
+test('sweet potato 收购记录: cmd 95 解析按时间倒序并汇总提成，空回包按暂无记录处理', async () => {
+    const types = await loadTypes();
+    const records = [
+        { timestamp: 1795590561, gid: 1006806548, count: 30, total: 4320, name: '风筝有风', avatar: 'a.png', level: 114, commission: 86 },
+        { timestamp: 1795590700, gid: 10002, count: 10, total: 1440, name: '好友A', avatar: 'b.png', level: 60, commission: 28 },
+    ];
+    const service = createSweetPotatoService(buildDeps({ types, records }));
+    const result = await service.getSweetPotatoRecords();
+    assert.equal(result.count, 2);
+    assert.equal(result.totalCommission, 114);
+    assert.equal(result.totalIncome, 5760);
+    assert.deepEqual(result.records.map(record => record.name), ['好友A', '风筝有风']);
+    assert.equal(result.records[1].commission, 86);
+
+    const calls = [];
+    const empty = createSweetPotatoService(buildDeps({ types, calls, records: [] }));
+    const none = await empty.getSweetPotatoRecords();
+    assert.equal(none.count, 0);
+    assert.match(none.message, /暂无/);
+    const recordCalls = calls.filter(call => call.method === 'Operate'
+        && Number(types.SweetPotatoOperateRequest.decode(call.body).cmd) === 95);
+    assert.equal(recordCalls.length, 1);
 });

@@ -15,6 +15,7 @@
 
 | 版本 | 更新序号 | 日期 | 更新内容 | 提交 |
 | --- | --- | --- | --- | --- |
+| v3.38.0 | #266 | 2026-11-25 | 新增以薯换福收购记录与自动比价卖薯，补齐上一轮遗留项 | — |
 | v3.37.1 | #265 | 2026-11-25 | 修复以薯换福兑换协议与自家铺子额度，补上提成领取 | — |
 | v3.37.0 | #263 | 2026-11-25 | 新增以薯换福完整闭环：种植、出售、分享与兑换商店 | — |
 | v3.36.10 | #262 | 2026-11-25 | 手机端设置页入口改成等宽三列网格 | — |
@@ -253,6 +254,17 @@ flowchart TB
 ```
 
 ## 详细记录
+
+### 2026-11-25 · v3.38.0（#266） · 新增以薯换福收购记录与自动比价卖薯，补齐上一轮遗留项
+
+上一轮按 li 分支抓包修正了协议，但还有两项明确没做：收购记录（cmd 95）与自动卖薯的比价策略。这次一起补完。
+
+- **收购记录（cmd 95）**：proto 补 `SweetPotatoPurchaseRecord`（实机字段 1 时间戳 / 2 卖家 gid / 3 数量 / 4 付给卖家总额 / 6 昵称 / 7 头像 / 8 等级 / 9 提成）与 `records` selector（field 195）。服务层 `getSweetPotatoRecords()` 按时间倒序取最近 30 条，汇总 `totalCommission` / `totalIncome`。没记录时服务端可能只回空包，所以这条只读接口单独放行「空回包」，不套写操作的 `activity.state` 校验。
+- **自动卖薯改成比价贪心**：新增 `scanShops()`（cmd 92 逐个读，并发 4，含自家铺子但排最后，按成交价降序 → 余量降序）。`autoSell()` 从最高价开始卖，一家额度吃满换下一家，单轮最多 3 家、笔间隔 1200ms，好友都收满时按开关兜底卖自己；额度不足 / 停收 / 价格变了只换下一家，回包对不上整轮停手。比价结果按配置间隔节流，本轮有成交就清缓存。
+- **四个可调参数**：`sweet_potato_scan_friend_limit`（20）、`sweet_potato_scan_interval_minutes`（30）、`sweet_potato_sell_min_count`（1）、`sweet_potato_sell_fallback_own`（true），落在 `SWEET_POTATO_DEFAULTS`，设置页开启「自动出售」后展开。前端 `SWEET_POTATO_SELL_FIELDS` 的兜底值与后端逐项比对。
+- **面板与前端**：新增 `GET /scan?limit=`（一键比价）与 `GET /records`（收购记录）；活动页的铺子列表分「分页查询 / 一键比价」两种模式，新增收购记录面板（分红明细与时间）；`limit` 已登记 `INPUT_SURFACE`，provider / worker / 超时表同步补齐。
+- **验证**：`core/tests/sweet-potato.test.js` 17 → 22 条（比价降序与单轮 3 家、兜底开关、最低数量、回包价格不符停手、记录倒序汇总、空回包、cmd 95 selector），`web/tests/sweet-potato-activity.test.mjs` 6 → 7 条。core 1087 条、web 373 条全绿，`vue-tsc`、`eslint --max-warnings=0`（前后端）、`pnpm build` 通过。
+- **仍未实服验证**：cmd 95 / 96 / 99 与好友铺子真实成交都只用假网关验证过风控分支，首次使用请手动点一次核对余额。细节见 `docs/sweet-potato.md`。
 
 ### 2026-11-25 · v3.37.1（#265） · 修复以薯换福兑换协议与自家铺子额度，补上提成领取
 

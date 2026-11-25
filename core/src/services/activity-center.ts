@@ -606,6 +606,8 @@ module.exports = {
     getSweetPotatoActivity: sweetPotatoService.getSweetPotatoActivity,
     getSweetPotatoShopCatalog: sweetPotatoService.getSweetPotatoShopCatalog,
     getSweetPotatoShops: sweetPotatoService.getSweetPotatoShops,
+    getSweetPotatoRecords: sweetPotatoService.getSweetPotatoRecords,
+    scanSweetPotatoShops: sweetPotatoService.scanShops,
     operateSweetPotato: sweetPotatoService.operateSweetPotato,
     exchangeSweetPotatoGoods: sweetPotatoService.exchangeSweetPotatoGoods,
     sweetPotatoClaimCommission: sweetPotatoService.claimCommission,

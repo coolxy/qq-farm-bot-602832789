@@ -31,7 +31,7 @@
 | 领取每日种子 | 91 | `claim_seed` | `grant` |
 | 查询铺子 | 92 | `get_shop` | `quote{base,bonus,quota,shop}` + `can_sell` |
 | 出售蜜薯 | 93 | `sell` | `{count, price, total, quota, balance}` |
-| 收购记录 | 95 | — | `records[]`（**尚未接入**） |
+| 收购记录 | 95 | `records` | `records[]`（timestamp/gid/count/total/name/avatar/level/commission） |
 | 兑换下单 | 96 | `exchange{index,count}` | `{price, grant, balance}` |
 | 兑换目录 | 97 | `catalog` | `catalog.goods[]` + 余额 |
 | 分享暴击 | 98 | `share` | `{price, grant, shop.share_key}` |
@@ -89,6 +89,12 @@ selector 是 oneof，字段号与 cmd 必须成对出现：只写 cmd 不带 sel
 
 好友把蜜薯卖进你的铺子后，你按比例拿提成：状态槽 `130.11` 是待领金额，cmd 99 领取后该字段消失、`coins` 增加。面板「待领提成」与自动化开关 `sweet_potato_commission` 都读这一项，没有提成时不发写请求。
 
+### 收购记录（cmd 95）
+
+好友把蜜薯卖进你的铺子会生成一条记录，cmd 95 请求不带参数、回包 `records[]`：字段 1 时间戳、2 卖家 gid、3 数量、4 付给卖家的总额（实机 `4320 = 30 × 144`）、6 昵称、7 头像、8 等级、9 你拿到的提成（实机 86）。界面只展示最近 30 条，按时间倒序，并汇总 `totalCommission` / `totalIncome`。
+
+没有记录时服务端可能只回一个空包，所以这一条只读接口不套 `rpc()` 的「必须带 `activity.state`」校验——空包，或回包 ID / cmd 至少一项匹配，都按「暂无收购记录」处理。
+
 ## 自动化与巡田
 
 六个开关（`core/src/models/store/shared-state.ts` 默认值来自 `SWEET_POTATO_DEFAULTS`，全部默认开启）：
@@ -98,9 +104,30 @@ selector 是 oneof，字段号与 cmd 必须成对出现：只写 cmd 不带 sel
 | `sweet_potato` | 总开关，关掉后子开关全部失效 |
 | `sweet_potato_claim` | 每日自动领种子 |
 | `sweet_potato_plant` | 巡田时空地自动种红薯、成熟自动收、枯死自动铲 |
-| `sweet_potato_sell` | 收购价大于 0 时自动卖蜜薯 |
+| `sweet_potato_sell` | 自动比价卖蜜薯（策略见下） |
 | `sweet_potato_share` | 每日自动分享暴击 |
 | `sweet_potato_commission` | 提成到账后自动领取 |
+
+另有四个数值/布尔参数，同样在 `SWEET_POTATO_DEFAULTS` 里，设置页「自动出售」展开后可调：
+
+| 参数 | 默认 | 作用 |
+| --- | --- | --- |
+| `sweet_potato_scan_friend_limit` | 20 | 单次比价扫描的铺子数上限（含自家），硬上限 100 |
+| `sweet_potato_scan_interval_minutes` | 30 | 两次全量比价的最小间隔，间隔内复用上一轮排序 |
+| `sweet_potato_sell_min_count` | 1 | 背包蜜薯达到这个数量才自动出售 |
+| `sweet_potato_sell_fallback_own` | true | 好友都不收时是否兜底卖给自己 |
+
+### 自动卖薯比价
+
+不再是「有暴击就卖给自己」，而是按成交价贪心吃额度：
+
+1. 背包蜜薯低于 `min_count` 直接跳过，不白扫好友；
+2. `scanShops()` 用 cmd 92 逐个读铺子（并发 4），自家铺子也在候选里但永远排最后，按「成交价降序 → 剩余额度降序」排序；
+3. 从最高价开始卖，一家额度吃满再换下一家，**单轮最多切 3 家**，相邻两笔间隔 1200ms，剩下的留到下一轮；
+4. 好友铺子要求 `expectedPrice` 与 `can_sell` 双确认；额度不足 / 停收 / 价格变了只换下一家，回包对不上就整轮停手，绝不重试；
+5. 好友都收满时按 `fallbackOwn` 决定是否卖给自己，自家铺子不受额度限制。
+
+比价结果按「上限 + 间隔」缓存，自动卖薯在间隔内直接复用排序；一旦本轮有成交就清空缓存，下一轮重新比价。
 
 - 活动自动化在 `core/src/services/activity-automation.ts` 里注册 5 个 op（claim / share / plant / sell / commission），其中 `plant` 在 `automation.farm` 开启时直接返回 false，把地交给巡田，避免两处抢同一块空地。
 - 巡田侧有两处接线：`farm/planting.ts` 的 `autoPlantEmptyLands` 在确定待种地块后先试红薯补种，**成功就返回、不回落普通策略**（种子用完才让普通作物接手）；`farm/scheduler.ts` 的 `autoHarvestLandIds` 在 `sweet_potato_plant` 关闭时把红薯地块从自动收获里排除，关掉种植就不会莫名其妙被收走。
@@ -116,21 +143,23 @@ selector 是 oneof，字段号与 cmd 必须成对出现：只写 cmd 不带 sel
 | GET | `/` | 活动状态（快照里不查目录，`fetchShop=false`） |
 | GET | `/shop-catalog` | 兑换目录（cmd 97） |
 | GET | `/shops?offset=` | 好友铺子列表，每页 5 条，30 秒价格缓存 |
+| GET | `/scan?limit=` | 一键比价：一次扫完（含自家），按成交价降序，上限 100 |
+| GET | `/records` | 收购记录（cmd 95），最近 30 条与提成汇总 |
 | POST | `/:action` | `claim` / `share` / `sell` / `exchange` / `commission` |
 
-`/:action` 与 `offset` 已登记到 `core/tests/input-surface.test.js` 的 `INPUT_SURFACE`（`service` 类型守卫），新增路由漏登记会让全量测试红。四个方法同步注册进 `runtime/data-provider.ts`、`core/worker.ts`、`runtime/worker-manager.ts`，超时表里 `getSweetPotatoShops` 90 秒、`operateSweetPotato` 180 秒。提成领取走同一个 `operateSweetPotato`，不额外加 provider 方法。
+`/:action`、`offset`、`limit` 已登记到 `core/tests/input-surface.test.js` 的 `INPUT_SURFACE`（`service` 类型守卫），新增路由漏登记会让全量测试红。新方法同步注册进 `runtime/data-provider.ts`、`core/worker.ts`、`runtime/worker-manager.ts`，超时表里 `getSweetPotatoShops` 90 秒、`scanSweetPotatoShops` 240 秒（100 家 × 并发 4 × 8 秒）、`getSweetPotatoRecords` 30 秒、`operateSweetPotato` 180 秒。提成领取走同一个 `operateSweetPotato`，不额外加 provider 方法。
 
 ## 前端
 
-- `web/src/components/activity/SweetPotatoTab.vue`：五格指标（收购价、福气币、蜜薯库存、剩余收购量、待领提成）、四个主操作（领种子 / 分享暴击 / 一键卖自己 / 领取提成）、好友铺子比价列表（分页继续加载，自家铺子显示「还可收 不限」，停收的铺子置灰并标原因）、选铺出售面板（数量 / 最多 / 全部 / 预计收入 / 二次确认）、兑换目录（序号 + 单价 + 限购 + 数量输入 + 兑换按钮）、规则折叠；`≤1180px` 三列、`≤767px` 两列。
+- `web/src/components/activity/SweetPotatoTab.vue`：五格指标（收购价、福气币、蜜薯库存、剩余收购量、待领提成）、四个主操作（领种子 / 分享暴击 / 一键卖自己 / 领取提成）、好友铺子双模式（「分页查询」每页 5 家 +「一键比价」按成交价排序，自家铺子显示「还可收 不限」，停收的置灰并标原因）、选铺出售面板（数量 / 最多 / 全部 / 预计收入 / 二次确认）、兑换目录（序号 + 单价 + 限购 + 数量输入 + 兑换按钮）、收购记录列表（分红明细与时间）、规则折叠；`≤1180px` 三列、`≤767px` 两列。
 - `web/src/views/activity-center/SweetPotatoActivityPage.vue`：`ActivityShell` + 活动头，独立页承载 Tab。
 - `web/src/stores/activity-center.ts`：`ActivityTabKey` / `ActivityGameplayKey` 加 `sweetPotato`，两处归一化白名单、`inferGameplayKey` 判断链、`SweetPotatoSummaryDto` 与快照字段同步补齐。
-- `web/src/components/settings/AccountFeatureSettings.vue`：设置页 6 个开关，总开关关闭时子开关 `disabled`；活动结束后整块从设置页隐藏（`activityKeyVisible`）。
+- `web/src/components/settings/AccountFeatureSettings.vue`：设置页 6 个开关，总开关关闭时子开关 `disabled`；开启「自动出售」后展开 3 个数值输入 + 兜底开关；活动结束后整块从设置页隐藏（`activityKeyVisible`）。
 - 活动目录 `ActivityDirectoryPage.vue` 会追加一条「以薯换福」入口，与三个同组 ID 共用同一个详情目标。
 
 ## 验证范围
 
-- `core/tests/sweet-potato.test.js` 17 条：七个 cmd 的 selector 往返、状态槽 11/13、`can_sell` 三态（含「回包没带字段」）、自家铺子 `remaining=0` 也能卖、出售后剩余额度按成交数递减、提成领取与无提成不发请求、目录归一化与价格不匹配时不留名字、兑换限购与余额拦截、已领种子不发写请求、价格变化中止、分享未涨价按结果不明、好友价格缓存、开关默认值、活动 ID 绑定玩法。
-- `web/tests/sweet-potato-activity.test.mjs` 6 条：玩法注册、目录入口、页面挂载、设置页 6 个开关与隐藏、提成/自家不限/序号兑换的静态断言、前后端 ID 与时间窗一致。
-- 全量：core 1082 条、web 372 条全绿；`vue-tsc`、`eslint --max-warnings=0`、`pnpm build` 通过。
-- **未在实服验证**的部分：兑换下单（cmd 96）与提成领取（cmd 99）按抓包实现，只用假网关验证了限购、余额、回包核对分支；好友铺子的真实成交同样只有假网关。首次使用请在界面里手动点一次核对余额。收购记录（cmd 95）尚未接入。
+- `core/tests/sweet-potato.test.js` 22 条：八个 cmd 的 selector 往返（含 cmd 95 落在 195）、状态槽 11/13、`can_sell` 三态（含「回包没带字段」）、自家铺子 `remaining=0` 也能卖、出售后剩余额度按成交数递减、提成领取与无提成不发请求、目录归一化与价格不匹配时不留名字、兑换限购与余额拦截、已领种子不发写请求、价格变化中止、分享未涨价按结果不明、好友价格缓存、开关默认值、活动 ID 绑定玩法；新增比价降序 + 单轮 3 家、兜底卖自己与关兜底、最低出售数量、回包价格对不上停手、收购记录倒序与汇总、空回包。
+- `web/tests/sweet-potato-activity.test.mjs` 7 条：玩法注册、目录入口、页面挂载、设置页 6 个开关与隐藏、提成/自家不限/序号兑换的静态断言、前后端 ID 与时间窗一致、4 个卖薯参数前后端默认值一致 + 比价/记录入口。
+- 全量：core 1087 条、web 373 条全绿；`vue-tsc`、`eslint --max-warnings=0`、`pnpm build` 通过。
+- **未在实服验证**的部分：兑换下单（cmd 96）、提成领取（cmd 99）、收购记录（cmd 95）与好友铺子的真实成交都只有假网关验证；自动卖薯的多家切换用的是夹具报价。首次使用请在界面里手动点一次核对余额。

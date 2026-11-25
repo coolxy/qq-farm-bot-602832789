@@ -23,6 +23,30 @@ const SHOP_CACHE_TTL_MS = 30000;
 const SHOP_PAGE_SIZE = 5;
 const SHARE_REPORT_SOURCE = 28;
 const SHARE_REPORT_SCENE = 2017;
+/** 收购记录只展示最近这么多条（界面「最近 30 条」）。 */
+const RECORD_LIST_LIMIT = 30;
+/** 比价扫描的铺子数硬上限，防止好友特别多时一轮发出上百个 cmd 92。 */
+const SCAN_MAX_LIMIT = 100;
+/** 比价时的并发数：4 个一批，和界面一次查一页的感觉接近。 */
+const SCAN_CONCURRENCY = 4;
+/** 单轮自动卖薯最多切换几家铺子：每卖一家都是一次 cmd 93 写，铺子越多越像脚本。 */
+const SELL_MAX_SHOPS_PER_RUN = 3;
+/** 相邻两笔出售之间的间隔，避免连着发写请求。 */
+const SELL_STEP_SPACER_MS = 1200;
+/**
+ * 这些错误说明「这家现在卖不进去」，换下一家即可，不算整轮失败。
+ * 反过来，回包对不上（RESULT_UNKNOWN）必须停手，绝不能重试猜结果。
+ */
+const SELL_SKIP_CODES = new Set([
+    'SWEET_POTATO_CAPACITY_EXCEEDED',
+    'SWEET_POTATO_SHOP_CLOSED',
+    'SWEET_POTATO_PRICE_CHANGED',
+    'SWEET_POTATO_NOT_FRIEND',
+]);
+
+function sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 function createSweetPotatoService(deps: any) {
     const {
@@ -49,6 +73,10 @@ function createSweetPotatoService(deps: any) {
     let shopsLoading = false;
     /** 出售幂等：同一次确认重复提交复用同一个 Promise。 */
     const sales = new Map<string, { signature: string; expiresAt: number; promise: Promise<any> }>();
+    /** 比价结果缓存：自动卖薯按配置间隔复用同一份排序，不用每轮把好友扫一遍。 */
+    let scanCache: { at: number; limit: number; shops: any[] } | null = null;
+    /** 自动化相邻两笔出售的间隔；测试注入 0 免得白等。 */
+    const stepSpacerMs = Number.isFinite(Number(deps.stepSpacerMs)) ? Math.max(0, Number(deps.stepSpacerMs)) : SELL_STEP_SPACER_MS;
 
     const now = (): number => Number(getServerTimeSec()) || Math.floor(Date.now() / 1000);
     const dayKey = (): string => new Date((now() + 8 * 3600) * 1000).toISOString().slice(0, 10);
@@ -57,6 +85,20 @@ function createSweetPotatoService(deps: any) {
         ? deps.getAutomation()
         : require('../../models/store').getAutomation());
     const enabled = (part: string | null = null): boolean => sweetPotatoEnabled(automation(), part as any);
+    /** 自动卖薯的四个可调参数：越界值一律夹到安全区间，不信任前端写入的脏数据。 */
+    function sellConfig(): { friendLimit: number; scanIntervalMinutes: number; minCount: number; fallbackOwn: boolean } {
+        const raw = automation() || {};
+        const int = (key: string, fallback: number, min: number, max: number): number => {
+            const parsed = Number.parseInt(String(raw[key]), 10);
+            return Number.isFinite(parsed) ? Math.max(min, Math.min(max, parsed)) : fallback;
+        };
+        return {
+            friendLimit: int('sweet_potato_scan_friend_limit', 20, 1, SCAN_MAX_LIMIT),
+            scanIntervalMinutes: int('sweet_potato_scan_interval_minutes', 30, 5, 720),
+            minCount: int('sweet_potato_sell_min_count', 1, 1, 9999),
+            fallbackOwn: raw.sweet_potato_sell_fallback_own !== false,
+        };
+    }
     const selfGid = (): string => {
         const state = deps.getUserState ? deps.getUserState() : require('../utils/network').getUserState();
         const gid = String(state?.gid || '');
@@ -324,6 +366,154 @@ function createSweetPotatoService(deps: any) {
     }
 
     /**
+     * 好友铺子比价（cmd 92 × N，只读）。按成交价降序，同价按剩余额度降序，
+     * 自家铺子永远排在最后——它是兜底，不是最优价。
+     *
+     * 只读不代表免费：N 个铺子就是 N 次请求，所以面板上限 100、自动卖薯按配置节流。
+     */
+    async function scanShops(input: any = {}): Promise<any> {
+        assertCanOperate(null, false);
+        const data = await getGroup();
+        if (!data.active) throw businessError('SWEET_POTATO_INACTIVE', '以薯换福活动未开放或已结束');
+        if (shopsLoading) throw businessError('SWEET_POTATO_SHOPS_BUSY', '正在查询好友价格，请稍后');
+        const config = sellConfig();
+        const rawLimit = Number(input?.limit);
+        const limit = Number.isFinite(rawLimit) && rawLimit > 0
+            ? Math.min(Math.floor(rawLimit), SCAN_MAX_LIMIT)
+            : config.friendLimit;
+        shopsLoading = true;
+        try {
+            const self = selfGid();
+            // 自家铺子先入列再截断：limit 很小时也要保证「卖自己」这条路还在。
+            const targets: any[] = [{ gid: self, own: true, name: '自己的铺子', avatarUrl: '' }];
+            for (const friend of friendsOf()) {
+                if (targets.length >= limit) break;
+                const gid = String(friend.gid);
+                if (gid === self) continue;
+                targets.push({
+                    gid,
+                    own: false,
+                    name: String(friend.name || '好友铺子'),
+                    avatarUrl: String(friend.avatarUrl || ''),
+                });
+            }
+            const shops: any[] = [];
+            let failed = 0;
+            let failureMessage = '';
+            for (let start = 0; start < targets.length; start += SCAN_CONCURRENCY) {
+                const batch = targets.slice(start, start + SCAN_CONCURRENCY);
+                const settled = await Promise.allSettled(batch.map(entry => queryShop(entry.gid, entry)));
+                settled.forEach((result: any, index: number) => {
+                    const entry = batch[index];
+                    if (result.status === 'rejected') {
+                        failed += 1;
+                        if (!failureMessage) failureMessage = String(result.reason?.message || '铺子行情查询失败');
+                        shops.push({
+                            hostGid: entry.gid,
+                            name: entry.name,
+                            avatarUrl: entry.avatarUrl,
+                            price: null,
+                            remaining: null,
+                            unlimited: entry.own,
+                            canSell: null,
+                            checkedAt: now() * 1000,
+                            available: false,
+                            error: '暂无法读取该铺子',
+                        });
+                        return;
+                    }
+                    shopCache.set(entry.gid, result.value);
+                    shops.push(result.value);
+                });
+            }
+            const rank = (shop: any): number => (shop.unlimited ? -1 : Number(shop.remaining ?? 0));
+            shops.sort((left: any, right: any) => {
+                const priceDiff = Number(right.price ?? -1) - Number(left.price ?? -1);
+                if (priceDiff !== 0) return priceDiff;
+                return rank(right) - rank(left);
+            });
+            const best = shops.find((shop: any) => shop.available && !shop.unlimited) || null;
+            const ownShop = shops.find((shop: any) => shop.unlimited) || null;
+            return {
+                shops,
+                best,
+                ownShop,
+                scanned: targets.length,
+                failed,
+                friendCount: Math.max(0, targets.length - 1),
+                cached: false,
+                message: shops.some((shop: any) => shop.available)
+                    ? `已比价 ${shops.length} 个铺子，最高收购价 ${Number(best?.price ?? ownShop?.price ?? 0)}`
+                    : (failureMessage || '没有可查询的铺子'),
+            };
+        } finally {
+            shopsLoading = false;
+        }
+    }
+
+    /** 自动卖薯用的比价：按「上限 + 配置间隔」复用上一轮排序，间隔内不再打网关。 */
+    async function rankedShops(limit: number, intervalMinutes: number): Promise<any[]> {
+        const at = Date.now();
+        if (scanCache && scanCache.limit === limit && at - scanCache.at < intervalMinutes * 60000) {
+            return scanCache.shops;
+        }
+        const result = await scanShops({ limit });
+        scanCache = { at, limit, shops: result.shops };
+        return result.shops;
+    }
+
+    function recordDto(record: any): any {
+        return {
+            timestamp: int64Number(record?.timestamp) * 1000,
+            gid: int64String(record?.gid),
+            name: String(record?.name || ''),
+            avatarUrl: String(record?.avatar || ''),
+            level: int64Number(record?.level),
+            count: int64Number(record?.count),
+            total: int64Number(record?.total),
+            commission: int64Number(record?.commission),
+        };
+    }
+
+    /**
+     * 收购记录（cmd 95，只读）：好友把蜜薯卖进你的铺子，字段 4 是付给卖家的总额，字段 9 是你的提成。
+     *
+     * 没有记录时服务端可能只回一个空包，所以不套 rpc() 的「必须带 activity.state」校验，
+     * 改成「空包，或 ID / 命令号匹配」都接受，其余按结果不明处理。
+     */
+    async function getSweetPotatoRecords(): Promise<any> {
+        assertCanOperate(null, false);
+        const operation = SWEET_POTATO_COMMANDS.records;
+        const body = Buffer.from(types.SweetPotatoOperateRequest.encode(types.SweetPotatoOperateRequest.create({
+            id: SWEET_POTATO.activityId,
+            cmd: operation.cmd,
+            [operation.field]: {},
+        })).finish());
+        const { body: replyBody } = await sendMsgAsync(SERVICE, 'Operate', body, { timeoutMs: 8000 });
+        const reply = types.SweetPotatoOperateReply.decode(replyBody);
+        const confirmed = int64String(reply?.id) === SWEET_POTATO.activityId
+            || int64Number(reply?.cmd) === operation.cmd;
+        if (replyBody.length > 0 && !confirmed) {
+            throw businessError('SWEET_POTATO_RESULT_UNKNOWN', '收购记录回包未能确认，请稍后重试');
+        }
+        const records = (Array.isArray(reply?.records?.records) ? reply.records.records : [])
+            .map(recordDto)
+            .sort((left: any, right: any) => right.timestamp - left.timestamp)
+            .slice(0, RECORD_LIST_LIMIT);
+        const totalCommission = records.reduce((sum: number, entry: any) => sum + entry.commission, 0);
+        const totalIncome = records.reduce((sum: number, entry: any) => sum + entry.total, 0);
+        return {
+            records,
+            count: records.length,
+            totalCommission,
+            totalIncome,
+            message: records.length
+                ? `最近 ${records.length} 条收购记录，合计提成 ${totalCommission} 福气币`
+                : '暂无收购记录',
+        };
+    }
+
+    /**
      * 兑换目录（cmd 97，只读）。
      *
      * 早期按「通用兑换商店」用 QueryActivityRequest 打 2026111709，回包永远是空目录：
@@ -470,7 +660,8 @@ function createSweetPotatoService(deps: any) {
 
         // sell
         const self = selfGid();
-        const owner = automatic || input?.hostGid === undefined ? self : String(input.hostGid || '');
+        // 自动卖薯也会指定好友铺子，所以不能因为 automatic 就强制写成自己。
+        const owner = input?.hostGid === undefined ? self : String(input.hostGid || '');
         if (!/^[1-9]\d{0,15}$/.test(owner)) {
             throw businessError('INVALID_SWEET_POTATO_HOST', '请选择有效的蜜薯铺子');
         }
@@ -630,13 +821,68 @@ function createSweetPotatoService(deps: any) {
         return !!result.changed;
     }
 
+    /**
+     * 自动卖薯：不是「无脑卖自己」，而是按成交价贪心吃额度。
+     *
+     * 1. 背包蜜薯低于 `min_count` 直接跳过，不白扫一遍好友；
+     * 2. 比价按 `scan_interval_minutes` 节流，间隔内复用上一轮排序；
+     * 3. 从最高价开始卖，一家额度吃满再换下一家，单轮最多 3 家；
+     * 4. 好友都不收/额度用完时，按 `fallback_own` 决定要不要卖给自己；
+     * 5. 每家失败只换下一家（额度不足、停收、价格变了），回包对不上就整轮停手。
+     */
     async function autoSell(): Promise<boolean> {
         if (!alive() || !enabled('sell')) return false;
         const data = await getGroup();
         if (!data.active) return false;
-        if (int64Number(data.entry.state.bonus_price) <= 0) return false;
-        const result = await mutate('sell', {}, true);
-        return !!result.changed;
+        const config = sellConfig();
+        let bag: { seeds: number; honey: number; coins: number };
+        try {
+            bag = await inventory();
+        } catch {
+            return false;
+        }
+        if (bag.honey <= 0 || bag.honey < config.minCount) return false;
+        const shops = await rankedShops(config.friendLimit, config.scanIntervalMinutes);
+        const candidates = config.fallbackOwn ? shops : shops.filter((shop: any) => !shop.unlimited);
+        let remaining = bag.honey;
+        let sold = 0;
+        let switched = 0;
+        let wrote = false;
+        for (const shop of candidates) {
+            if (remaining <= 0 || switched >= SELL_MAX_SHOPS_PER_RUN) break;
+            if (!shop.available || shop.canSell === false) continue;
+            const price = Number(shop.price || 0);
+            if (!price) continue;
+            // 自家铺子不占好友额度，上限只看背包；好友铺子按剩余额度截断。
+            const quota = shop.unlimited ? remaining : Number(shop.remaining || 0);
+            const count = Math.min(remaining, quota);
+            if (count <= 0) continue;
+            if (wrote && stepSpacerMs > 0) await sleep(stepSpacerMs);
+            try {
+                const result = await mutate('sell', {
+                    hostGid: shop.unlimited ? undefined : shop.hostGid,
+                    count,
+                    expectedPrice: shop.unlimited ? undefined : price,
+                }, true);
+                // 背包已经空了（并发收获/手动出售抢在前面），本轮直接结束。
+                if (!result.changed) break;
+                wrote = true;
+                switched += 1;
+                const got = Number(result.sold || 0);
+                remaining -= got;
+                sold += got;
+            } catch (error: any) {
+                if (SELL_SKIP_CODES.has(String(error?.code || ''))) {
+                    // 这家现在卖不进去，标记额度用完，换下一家。
+                    shop.remaining = 0;
+                    continue;
+                }
+                // 回包不可信这类错误必须停手，绝不能重试猜结果。
+                break;
+            }
+        }
+        if (sold > 0) scanCache = null;
+        return sold > 0;
     }
 
     async function autoClaimCommission(): Promise<boolean> {
@@ -725,6 +971,8 @@ function createSweetPotatoService(deps: any) {
         getSweetPotatoActivity,
         getSweetPotatoShopCatalog,
         getSweetPotatoShops,
+        getSweetPotatoRecords,
+        scanShops,
         operateSweetPotato,
         exchangeSweetPotatoGoods,
         claimCommission,

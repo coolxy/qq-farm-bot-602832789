@@ -110,7 +110,33 @@ message SweetPotatoCommissionReply {
     int64 coins = 4;
 }
 
-// cmd 取值：91 领种子 / 92 查铺 / 93 出售 / 96 兑换下单 / 97 兑换目录 / 98 分享 / 99 领提成。
+// 一条收购记录：好友把蜜薯卖进你的铺子，你按比例拿到提成。
+// 2026-11-25 15:11 抓包：{1:1795590561, 2:1006806548, 3:30, 4:4320, 6:'风筝有风', 7:avatar, 8:114, 9:86}，
+// 界面写「你收购了风筝有风 蜜薯30个，获得分红86」。
+message SweetPotatoPurchaseRecord {
+    // 收购时间（秒）。
+    int64 timestamp = 1;
+    // 卖家 gid。
+    int64 gid = 2;
+    // 收购数量。
+    int64 count = 3;
+    // 本次支付给卖家的福气币总额（实机 4320 = 30 × 144）。
+    int64 total = 4;
+    string name = 6;
+    string avatar = 7;
+    // 卖家等级，实机 114。
+    int64 level = 8;
+    // 本人从这笔收购里拿到的提成，实机 86。
+    int64 commission = 9;
+}
+
+// cmd 95 收购记录列表：请求不带参数，回包按服务端顺序下发（一般从新到旧）。
+message SweetPotatoRecordReply {
+    repeated SweetPotatoPurchaseRecord records = 1;
+}
+
+// cmd 取值：91 领种子 / 92 查铺 / 93 出售 / 95 收购记录 /
+//           96 兑换下单 / 97 兑换目录 / 98 分享 / 99 领提成。
 // 请求体统一是 id + cmd + 与 cmd 对应的 selector（190 + cmd）。
 message SweetPotatoOperateRequest {
     int64 id = 1;
@@ -118,6 +144,7 @@ message SweetPotatoOperateRequest {
     SweetPotatoEmpty claim_seed = 191;
     SweetPotatoShopRequest get_shop = 192;
     SweetPotatoSellRequest sell = 193;
+    SweetPotatoEmpty records = 195;
     SweetPotatoExchangeRequest exchange = 196;
     SweetPotatoEmpty catalog = 197;
     SweetPotatoEmpty share = 198;
@@ -179,6 +206,7 @@ message SweetPotatoOperateReply {
     SweetPotatoClaimReply claim_seed = 191;
     SweetPotatoShopReply get_shop = 192;
     SweetPotatoSellReply sell = 193;
+    SweetPotatoRecordReply records = 195;
     SweetPotatoExchangeReply exchange = 196;
     SweetPotatoCatalog catalog = 197;
     SweetPotatoShareReply share = 198;

@@ -39,6 +39,7 @@ const SWEET_POTATO_COMMANDS = {
     claim: { cmd: 91, field: 'claim_seed' },
     shop: { cmd: 92, field: 'get_shop' },
     sell: { cmd: 93, field: 'sell' },
+    records: { cmd: 95, field: 'records' },
     catalog: { cmd: 97, field: 'catalog' },
     exchange: { cmd: 96, field: 'exchange' },
     share: { cmd: 98, field: 'share' },
@@ -65,7 +66,14 @@ const SWEET_POTATO_CATALOG_TEMPLATE: Record<number, { itemId: string; name: stri
 /** 单个铺子每日接收上限（抓包 quota 满值），只用于展示进度，不做校验。 */
 const SWEET_POTATO_SHOP_DAILY_QUOTA = 8000;
 
-/** 自动化开关默认值：与活动一起默认开启，用户明确关掉的保留。 */
+/**
+ * 自动任务与自动卖薯的默认参数。
+ *
+ * 自动卖薯不是「无脑卖自己」：先按成交价（基础 + 暴击）把好友铺子排序，
+ * 抢最高价的额度，一家吃满再换下一家，单轮最多切 3 家；好友都收满时
+ * 才按 `sell_fallback_own` 兜底卖给自己。比价按 `scan_interval_minutes`
+ * 节流，间隔内复用上一轮排序结果，避免每轮都把好友扫一遍。
+ */
 const SWEET_POTATO_DEFAULTS = {
     sweet_potato: true,
     sweet_potato_claim: true,
@@ -73,6 +81,14 @@ const SWEET_POTATO_DEFAULTS = {
     sweet_potato_sell: true,
     sweet_potato_share: true,
     sweet_potato_commission: true,
+    /** 单次比价扫描的铺子数上限（含自家铺子）。 */
+    sweet_potato_scan_friend_limit: 20,
+    /** 两次全量比价之间的最小间隔（分钟），间隔内复用排序结果。 */
+    sweet_potato_scan_interval_minutes: 30,
+    /** 背包蜜薯达到这个数量才自动出售；低于阈值留到下一轮。 */
+    sweet_potato_sell_min_count: 1,
+    /** 好友铺子都收满（或不收）时，是否兜底卖给自己。 */
+    sweet_potato_sell_fallback_own: true,
 } as const;
 
 type SweetPotatoPart = 'claim' | 'plant' | 'sell' | 'share' | 'commission' | null;

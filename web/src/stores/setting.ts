@@ -91,6 +91,14 @@ export interface AutomationConfig {
   sweet_potato_sell?: boolean
   sweet_potato_share?: boolean
   sweet_potato_commission?: boolean
+  /** 自动卖薯：比价扫描的铺子数上限（含自家铺子） */
+  sweet_potato_scan_friend_limit?: number
+  /** 自动卖薯：两次全量比价之间的最小间隔（分钟） */
+  sweet_potato_scan_interval_minutes?: number
+  /** 自动卖薯：背包蜜薯达到这个数量才自动出售 */
+  sweet_potato_sell_min_count?: number
+  /** 自动卖薯：好友都不收时是否兜底卖给自己 */
+  sweet_potato_sell_fallback_own?: boolean
   // 七夕
   qixi_dew_use?: boolean
   qixi_bridge_build?: boolean

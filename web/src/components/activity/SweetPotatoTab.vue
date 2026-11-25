@@ -30,6 +30,17 @@ interface SweetPotatoGoods {
   exchangeable: boolean
 }
 
+interface SweetPotatoRecord {
+  timestamp: number
+  gid: string
+  name: string
+  avatarUrl: string
+  level: number
+  count: number
+  total: number
+  commission: number
+}
+
 interface SweetPotatoActivity {
   title: string
   active: boolean
@@ -65,6 +76,15 @@ const shopsTotal = ref(0)
 const shopsOffset = ref(0)
 const shopsHasMore = ref(false)
 const shopsOpen = ref(false)
+/** page = 按好友顺序分页查询；scan = 一次扫完并按收购价排序。 */
+const shopsMode = ref<'page' | 'scan'>('page')
+const scanMessage = ref('')
+
+const records = ref<SweetPotatoRecord[]>([])
+const recordsLoading = ref(false)
+const recordsOpen = ref(false)
+const recordsMessage = ref('')
+const recordsTotal = ref(0)
 
 const catalog = ref<SweetPotatoGoods[]>([])
 const catalogLoading = ref(false)
@@ -142,7 +162,10 @@ async function act(action: string, payload: Record<string, unknown> = {}) {
       await load()
     if (action === 'sell') {
       sellTarget.value = null
-      await loadShops(true)
+      if (shopsMode.value === 'scan')
+        await scanShops()
+      else
+        await loadShops(true)
     }
     if (action === 'exchange')
       await loadCatalog()
@@ -172,12 +195,60 @@ async function loadShops(reset = false) {
     shopsOffset.value = Number(data.nextOffset) || shops.value.length
     shopsHasMore.value = !!data.hasMore
     shopsOpen.value = true
+    shopsMode.value = 'page'
+    scanMessage.value = ''
   }
   catch (err: any) {
     error.value = messageOf(err)
   }
   finally {
     shopsLoading.value = false
+  }
+}
+
+/** 一键比价：一次扫完全部好友铺子（含自家），按成交价从高到低给出排序。 */
+async function scanShops() {
+  if (!props.accountId || shopsLoading.value)
+    return
+  shopsLoading.value = true
+  error.value = ''
+  try {
+    const response = await api.get('/api/activity-center/sweet-potato/scan', accountHeaders())
+    const data = response.data?.data || {}
+    shops.value = Array.isArray(data.shops) ? data.shops : []
+    shopsTotal.value = shops.value.length
+    shopsHasMore.value = false
+    shopsOffset.value = shops.value.length
+    shopsOpen.value = true
+    shopsMode.value = 'scan'
+    scanMessage.value = String(data.message || '')
+  }
+  catch (err: any) {
+    error.value = messageOf(err)
+  }
+  finally {
+    shopsLoading.value = false
+  }
+}
+
+/** 收购记录（cmd 95）：好友把蜜薯卖进自己铺子产生的分红明细。 */
+async function loadRecords() {
+  if (!props.accountId || recordsLoading.value)
+    return
+  recordsLoading.value = true
+  try {
+    const response = await api.get('/api/activity-center/sweet-potato/records', accountHeaders())
+    const data = response.data?.data || {}
+    records.value = Array.isArray(data.records) ? data.records : []
+    recordsTotal.value = Number(data.count) || records.value.length
+    recordsMessage.value = String(data.message || '')
+    recordsOpen.value = true
+  }
+  catch (err: any) {
+    recordsMessage.value = messageOf(err)
+  }
+  finally {
+    recordsLoading.value = false
   }
 }
 
@@ -246,6 +317,11 @@ function formatTime(value: number) {
 watch(() => props.accountId, () => {
   activity.value = null
   shops.value = []
+  shopsMode.value = 'page'
+  scanMessage.value = ''
+  records.value = []
+  recordsOpen.value = false
+  recordsMessage.value = ''
   catalog.value = []
   catalogCounts.value = {}
   sellTarget.value = null
@@ -327,20 +403,27 @@ onMounted(load)
           <header class="sp-panel-head">
             <div>
               <strong>好友铺子收购价</strong>
-              <span v-if="shopsTotal">已查询 {{ shops.length }} / {{ shopsTotal }}</span>
+              <span v-if="shopsMode === 'scan' && shops.length">已按收购价排序（{{ shops.length }} 个铺子）</span>
+              <span v-else-if="shopsTotal">已查询 {{ shops.length }} / {{ shopsTotal }}</span>
             </div>
             <div class="sp-panel-tools">
-              <button type="button" class="sp-link" :disabled="shopsLoading" @click="loadShops(true)">
-                {{ shopsOpen ? '刷新价格' : '查询价格' }}
+              <button type="button" class="sp-link" :disabled="shopsLoading" @click="scanShops">
+                {{ shopsMode === 'scan' ? '重新比价' : '一键比价' }}
               </button>
-              <button v-if="shopsHasMore" type="button" class="sp-link" :disabled="shopsLoading" @click="loadShops(false)">
+              <button type="button" class="sp-link" :disabled="shopsLoading" @click="loadShops(true)">
+                {{ shopsMode === 'page' && shopsOpen ? '刷新价格' : '分页查询' }}
+              </button>
+              <button v-if="shopsHasMore && shopsMode === 'page'" type="button" class="sp-link" :disabled="shopsLoading" @click="loadShops(false)">
                 {{ shopsLoading ? '查询中…' : '继续加载' }}
               </button>
             </div>
           </header>
 
-          <p v-if="!shopsOpen" class="sp-empty">
-            价格缓存 30 秒；按当前价格从高到低展示，出售前会再复核一次。
+          <p v-if="shopsMode === 'scan' && scanMessage" class="sp-empty">
+            {{ scanMessage }}
+          </p>
+          <p v-else-if="!shopsOpen" class="sp-empty">
+            「一键比价」会扫一遍好友铺子并按成交价排序（受设置页「比价好友数上限」限制）；「分页查询」每页 5 家、价格缓存 30 秒，适合好友很多时慢慢看。出售前都会再复核一次价格与余量。
           </p>
           <p v-else-if="!shops.length" class="sp-empty">
             没有可查询的好友铺子。
@@ -434,6 +517,34 @@ onMounted(load)
                 >
                   兑换 {{ catalogCost(goods) }}
                 </button>
+              </div>
+            </li>
+          </ul>
+        </div>
+
+        <div class="sp-panel">
+          <header class="sp-panel-head">
+            <div>
+              <strong>收购记录</strong>
+              <span v-if="recordsOpen && recordsTotal">最近 {{ records.length }} 条</span>
+              <span v-else>好友把蜜薯卖进你铺子的分红明细</span>
+            </div>
+            <button type="button" class="sp-link" :disabled="recordsLoading" @click="loadRecords">
+              {{ recordsLoading ? '读取中…' : (recordsOpen ? '刷新记录' : '查看记录') }}
+            </button>
+          </header>
+          <p v-if="recordsOpen && !records.length" class="sp-empty">
+            {{ recordsMessage || '暂无收购记录' }}
+          </p>
+          <ul v-else-if="records.length" class="sp-records">
+            <li v-for="record in records" :key="`${record.gid}-${record.timestamp}-${record.count}`" class="sp-record">
+              <div class="sp-record-main">
+                <strong>{{ record.name || record.gid }}</strong>
+                <span>收购 {{ record.count }} 个 · 支付 {{ record.total }} 福气币</span>
+              </div>
+              <div class="sp-record-side">
+                <span class="sp-record-commission">+{{ record.commission }}</span>
+                <span>{{ formatTime(record.timestamp) }}</span>
               </div>
             </li>
           </ul>
@@ -598,6 +709,7 @@ onMounted(load)
 
 .sp-panel-tools {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
 }
 
@@ -671,6 +783,53 @@ onMounted(load)
   flex: none;
   font-size: 11px;
   opacity: 0.85;
+}
+
+.sp-records {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sp-record {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.sp-record-main,
+.sp-record-side {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.sp-record-main strong {
+  font-size: 12px;
+}
+
+.sp-record-main span,
+.sp-record-side span {
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.sp-record-side {
+  justify-items: end;
+  flex: none;
+}
+
+.sp-record-commission {
+  color: #2f6b4f;
+  font-weight: 600;
+  opacity: 1 !important;
 }
 
 .sp-shop-count {

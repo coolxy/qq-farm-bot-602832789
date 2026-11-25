@@ -1,12 +1,20 @@
 {
   "major": 3,
-  "minor": 37,
-  "patch": 1,
-  "build": 265,
-  "version": "3.37.1",
-  "updatedAt": "2026-11-25T10:53:34.923Z",
+  "minor": 38,
+  "patch": 0,
+  "build": 266,
+  "version": "3.38.0",
+  "updatedAt": "2026-11-25T11:18:42.269Z",
   "lastCommit": "—",
   "history": [
+    {
+      "version": "3.38.0",
+      "build": 266,
+      "date": "2026-11-25",
+      "summary": "新增以薯换福收购记录与自动比价卖薯，补齐上一轮遗留项",
+      "commit": "—",
+      "type": "minor"
+    },
     {
       "version": "3.37.1",
       "build": 265,

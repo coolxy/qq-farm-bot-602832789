@@ -9,7 +9,7 @@ import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseSwitch from '@/components/ui/BaseSwitch.vue'
 import HourInput from '@/components/ui/HourInput.vue'
-import { MILK_TEA_ACTIVITY_WINDOW, MILK_TEA_AUTOMATION_OPTIONS, SHARE_REWARD_ACTIVITY_WINDOW, SWEET_POTATO_ACTIVITY_WINDOW, SWEET_POTATO_AUTOMATION_OPTIONS } from '@/constants/activity-windows'
+import { MILK_TEA_ACTIVITY_WINDOW, MILK_TEA_AUTOMATION_OPTIONS, SHARE_REWARD_ACTIVITY_WINDOW, SWEET_POTATO_ACTIVITY_WINDOW, SWEET_POTATO_AUTOMATION_OPTIONS, SWEET_POTATO_SELL_FIELDS } from '@/constants/activity-windows'
 import { FERTILIZER_TIME_UNITS, fertilizerTimeSeconds, fertilizerTimeValue } from '@/utils/fertilizer-time'
 import {
   RANCH_AUTOMATION_LIMITS,
@@ -64,6 +64,8 @@ const showMilkTeaActivity = computed(() => !milkTeaEnded.value)
 const milkTeaSettings = computed(() => MILK_TEA_AUTOMATION_OPTIONS)
 const sweetPotatoEnded = computed(() => Date.now() > SWEET_POTATO_ACTIVITY_WINDOW.endMs)
 const sweetPotatoSettings = SWEET_POTATO_AUTOMATION_OPTIONS
+// 自动卖薯的数值参数（比价好友数、比价间隔、最低出售数量），键名与后端 automation 一致。
+const sweetPotatoSellFields = SWEET_POTATO_SELL_FIELDS
 // 牧歌初启自动化开关（BUGDey 版五个 UI 开关；muge_personality_settle 由自动答题流程内部驱动，不单独展示）。
 const mugeSettings = [
   { key: 'muge_task_claim', label: '自动领取成长任务' },
@@ -851,7 +853,7 @@ function cancel() {
                     以薯换福
                   </div>
                   <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                    活动期间优先在空地种背包里的红薯，不铲正在生长的作物；关闭种植开关后，普通巡田也不会替你收红薯。自动出售只卖自己的铺子，开启分享时会先确认暴击涨价。收购提成到账后自动领取。
+                    活动期间优先在空地种背包里的红薯，不铲正在生长的作物；关闭种植开关后，普通巡田也不会替你收红薯。自动出售按收购价从高到低比价，一家额度吃满再换下一家（单轮最多 3 家），好友都不收时才按下面的开关兜底卖给自己。收购提成到账后自动领取。
                   </div>
                 </div>
                 <div class="grid gap-3 sm:grid-cols-2">
@@ -862,6 +864,24 @@ function cancel() {
                     :label="item.label"
                     :disabled="item.key !== 'sweet_potato' && automation.automation.sweet_potato === false"
                   />
+                </div>
+                <div
+                  v-if="automation.automation.sweet_potato !== false && automation.automation.sweet_potato_sell !== false"
+                  class="border-t border-orange-100 pt-3 space-y-3 dark:border-orange-900/40"
+                >
+                  <div class="grid gap-3 sm:grid-cols-3">
+                    <BaseInput
+                      v-for="field in sweetPotatoSellFields"
+                      :key="field.key"
+                      v-model.number="automation.automation[field.key]"
+                      :label="field.label"
+                      type="number"
+                      :min="field.min"
+                      :max="field.max"
+                      :step="field.step"
+                    />
+                  </div>
+                  <BaseSwitch v-model="automation.automation.sweet_potato_sell_fallback_own" label="好友都不收时卖给自己" />
                 </div>
               </section>
             </div>
