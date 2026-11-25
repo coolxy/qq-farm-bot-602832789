@@ -52,6 +52,7 @@ export const SWEET_POTATO_AUTOMATION_OPTIONS = [
   { key: 'sweet_potato_plant', label: '自动种植与收获红薯' },
   { key: 'sweet_potato_sell', label: '自动出售蜜薯' },
   { key: 'sweet_potato_share', label: '自动分享暴击' },
+  { key: 'sweet_potato_commission', label: '自动领取收购提成' },
 ] as const
 
 export interface MilkTeaAutomationOption {

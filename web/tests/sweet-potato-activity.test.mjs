@@ -12,6 +12,7 @@ const activityCenter = read('../src/views/ActivityCenter.vue')
 const directory = read('../src/views/activity-center/ActivityDirectoryPage.vue')
 const settings = read('../src/components/settings/AccountFeatureSettings.vue')
 const windows = read('../src/constants/activity-windows.ts')
+const tab = read('../src/components/activity/SweetPotatoTab.vue')
 const coreConfig = read('../../core/src/config/sweet-potato.ts')
 
 test('活动目录能把 2026111708 解析成以薯换福玩法', () => {
@@ -38,9 +39,20 @@ test('设置页有以薯换福开关，且活动结束后隐藏', () => {
   assert.match(settings, /const sweetPotatoEnded = computed\(\(\) => Date\.now\(\) > SWEET_POTATO_ACTIVITY_WINDOW\.endMs\)/)
   assert.match(settings, /v-for="item in sweetPotatoSettings"/)
   assert.match(settings, /v-if="!sweetPotatoEnded"/)
-  for (const key of ['sweet_potato', 'sweet_potato_claim', 'sweet_potato_plant', 'sweet_potato_sell', 'sweet_potato_share']) {
+  for (const key of ['sweet_potato', 'sweet_potato_claim', 'sweet_potato_plant', 'sweet_potato_sell', 'sweet_potato_share', 'sweet_potato_commission']) {
     assert.ok(windows.includes(key), `activity-windows.ts 缺少 ${key}`)
   }
+})
+
+test('活动页覆盖提成领取、自家铺子不限与序号制兑换目录', () => {
+  assert.match(tab, /pendingCommission/)
+  assert.match(tab, /act\('commission'\)/)
+  // 自家铺子不占好友额度：上限只看背包，不能拿 remaining 当上限。
+  assert.match(tab, /if \(sellTarget\.value\.unlimited\)/)
+  assert.match(tab, /shop\.unlimited \? '还可收 不限'/)
+  // 兑换目录按序号下单，价格与限购都来自 cmd 97。
+  assert.match(tab, /exchangeGoods\(goods\)/)
+  assert.match(tab, /index: goods\.index, count: catalogCount\(goods\.index\)/)
 })
 
 test('前后端活动 ID、时间窗与物品 ID 完全一致', () => {

@@ -862,6 +862,12 @@ function buildOps(): AutomationOp[] {
             activityIds: WINDOW_IDS.sweetPotato,
             run: async () => activityCenter.sweetPotatoAutoSell(),
         },
+        {
+            key: 'sweet_potato_commission',
+            label: '以薯换福-领取收购提成',
+            activityIds: WINDOW_IDS.sweetPotato,
+            run: async () => activityCenter.sweetPotatoAutoClaimCommission(),
+        },
     ];
 }
 

@@ -61,8 +61,14 @@ function buildGroupReply(types, statePatch = {}) {
     });
 }
 
-function buildDeps({ types, statePatch = {}, bag = { 20307: 3, 1032: 20, 1033: 0 }, calls = [] }) {
+function buildDeps({ types, statePatch = {}, bag = { 20307: 3, 1032: 20, 1033: 0 }, calls = [], shop = {}, catalog = null }) {
     let groupReply = buildGroupReply(types, statePatch);
+    const shopRemaining = shop.remaining ?? 50;
+    const shopCanSell = shop.canSell;
+    const catalogGoods = catalog || [
+        { index: 10, price: 7000, status: 2, limit: 3 },
+        { index: 9, price: 35000, status: 2, limit: 1 },
+    ];
     const deps = {
         types,
         getServerTimeSec: () => ACTIVITY_START,
@@ -104,11 +110,20 @@ function buildDeps({ types, statePatch = {}, bag = { 20307: 3, 1032: 20, 1033: 0
                 const request = types.SweetPotatoOperateRequest.decode(body);
                 assert.equal(String(request.id), SWEET_POTATO.activityId);
                 if (Number(request.cmd) === 92) {
+                    const shopReply = {
+                        base_price: 10,
+                        bonus_price: 2,
+                        remaining: shopRemaining,
+                        owner: { gid: String(request.get_shop.host_gid), name: '好友A' },
+                    };
+                    const payload = { shop: shopReply };
+                    // undefined 表示回包不带 can_sell（三态里的「未下发」）。
+                    if (shopCanSell !== undefined) payload.can_sell = shopCanSell;
                     return {
                         body: encode(types.SweetPotatoOperateReply, {
                             id: SWEET_POTATO.activityId,
                             cmd: 92,
-                            get_shop: { shop: { base_price: 10, bonus_price: 2, remaining: 50, owner: { gid: String(request.get_shop.host_gid), name: '好友A' } } },
+                            get_shop: payload,
                             activity: { head: { id: SWEET_POTATO.activityId }, state: { claims: {}, base_price: 10, bonus_price: 2, capacity: 100 } },
                         }),
                     };
@@ -118,8 +133,48 @@ function buildDeps({ types, statePatch = {}, bag = { 20307: 3, 1032: 20, 1033: 0
                         body: encode(types.SweetPotatoOperateReply, {
                             id: SWEET_POTATO.activityId,
                             cmd: 93,
-                            sell: { count: request.sell.count, price: 12, income: Number(request.sell.count) * 12, remaining: 50 - Number(request.sell.count) },
+                            sell: {
+                                count: request.sell.count,
+                                price: 12,
+                                income: Number(request.sell.count) * 12,
+                                daily_quota: 8000,
+                                coins: 100,
+                            },
                             activity: { head: { id: SWEET_POTATO.activityId }, state: { claims: {}, base_price: 10, bonus_price: 2, capacity: 100 } },
+                        }),
+                    };
+                }
+                if (Number(request.cmd) === 97) {
+                    return {
+                        body: encode(types.SweetPotatoOperateReply, {
+                            id: SWEET_POTATO.activityId,
+                            cmd: 97,
+                            catalog: { goods: catalogGoods, coins: 100000 },
+                        }),
+                    };
+                }
+                if (Number(request.cmd) === 96) {
+                    const goods = catalogGoods.find(entry => Number(entry.index) === Number(request.exchange.index)) || {};
+                    return {
+                        body: encode(types.SweetPotatoOperateReply, {
+                            id: SWEET_POTATO.activityId,
+                            cmd: 96,
+                            exchange: {
+                                price: goods.price,
+                                grant: { item_id: 80001, count: request.exchange.count },
+                                coins: 100000 - Number(goods.price) * Number(request.exchange.count),
+                            },
+                            activity: { head: { id: SWEET_POTATO.activityId }, state: { claims: {}, coins: 100000 - Number(goods.price) * Number(request.exchange.count) } },
+                        }),
+                    };
+                }
+                if (Number(request.cmd) === 99) {
+                    return {
+                        body: encode(types.SweetPotatoOperateReply, {
+                            id: SWEET_POTATO.activityId,
+                            cmd: 99,
+                            claim_commission: { amount: 86, coins: 32156 },
+                            activity: { head: { id: SWEET_POTATO.activityId }, state: { claims: {}, coins: 32156 } },
                         }),
                     };
                 }
@@ -151,7 +206,7 @@ function buildDeps({ types, statePatch = {}, bag = { 20307: 3, 1032: 20, 1033: 0
     return deps;
 }
 
-test('sweet potato proto: 四个 selector 落在 191/192/193/198，cmd 与抓包一致', async () => {
+test('sweet potato proto: 七个 selector 落在 190+cmd，cmd 与实机抓包一致', async () => {
     const types = await loadTypes();
     const encodeRequest = payload => types.SweetPotatoOperateRequest.decode(
         encode(types.SweetPotatoOperateRequest, { id: SWEET_POTATO.activityId, ...payload }),
@@ -171,6 +226,43 @@ test('sweet potato proto: 四个 selector 落在 191/192/193/198，cmd 与抓包
     const share = encodeRequest({ cmd: 98, share: {} });
     assert.equal(Number(share.cmd), 98);
     assert.ok(share.share);
+    // 兑换目录 97 / 兑换下单 96 / 领提成 99：兑换走主活动，别再打 2026111709。
+    const catalog = encodeRequest({ cmd: 97, catalog: {} });
+    assert.equal(Number(catalog.cmd), 97);
+    assert.ok(catalog.catalog);
+    const exchange = encodeRequest({ cmd: 96, exchange: { index: 10, count: 2 } });
+    assert.equal(Number(exchange.cmd), 96);
+    assert.equal(String(exchange.exchange.index), '10');
+    assert.equal(String(exchange.exchange.count), '2');
+    const commission = encodeRequest({ cmd: 99, claim_commission: {} });
+    assert.equal(Number(commission.cmd), 99);
+    assert.ok(commission.claim_commission);
+});
+
+test('sweet potato proto: 状态槽 11/13 与 can_sell 按 bool 解', async () => {
+    const types = await loadTypes();
+    const state = types.SweetPotatoState.decode(encode(types.SweetPotatoState, {
+        coins: 32070,
+        pending_commission: 86,
+        commission_flag: 1,
+    }));
+    assert.equal(String(state.coins), '32070');
+    assert.equal(String(state.pending_commission), '86');
+    assert.equal(String(state.commission_flag), '1');
+    const reply = types.SweetPotatoOperateReply.decode(encode(types.SweetPotatoOperateReply, {
+        id: SWEET_POTATO.activityId,
+        cmd: 92,
+        get_shop: { shop: { base_price: 99, bonus_price: 66, remaining: 8000 }, can_sell: false },
+    }));
+    assert.equal(reply.get_shop.can_sell, false);
+    // 未下发时必须读不出字段（= 未知），不能用 false 兜底。
+    assert.equal(Object.prototype.hasOwnProperty.call(reply.get_shop, 'can_sell'), true);
+    const bare = types.SweetPotatoOperateReply.decode(encode(types.SweetPotatoOperateReply, {
+        id: SWEET_POTATO.activityId,
+        cmd: 92,
+        get_shop: { shop: { base_price: 99, bonus_price: 66, remaining: 8000 } },
+    }));
+    assert.equal(Object.prototype.hasOwnProperty.call(bare.get_shop, 'can_sell'), false);
 });
 
 test('sweet potato: 已领种子直接返回 changed=false，不再发 Operate', async () => {
@@ -184,7 +276,9 @@ test('sweet potato: 已领种子直接返回 changed=false，不再发 Operate',
     const result = await service.operateSweetPotato('claim', {});
     assert.equal(result.changed, false);
     assert.match(result.message, /已领取/);
-    assert.equal(calls.filter(call => call.method === 'Operate').length, 0);
+    // 只允许后续刷新用的只读查询（cmd 97 目录），不能再发 cmd 91 写请求。
+    assert.equal(calls.filter(call => call.method === 'Operate'
+        && Number(types.SweetPotatoOperateRequest.decode(call.body).cmd) === 91).length, 0);
 });
 
 test('sweet potato: 好友铺子价格变化时中止出售，不发写请求', async () => {
@@ -240,11 +334,13 @@ test('sweet potato: 活动自动化默认开启，且子开关受总开关约束
         sweet_potato_plant: true,
         sweet_potato_sell: true,
         sweet_potato_share: true,
+        sweet_potato_commission: true,
     });
     assert.equal(sweetPotatoEnabled({}, 'sell'), true);
     assert.equal(sweetPotatoEnabled({ sweet_potato: false }, 'sell'), false);
     assert.equal(sweetPotatoEnabled({ sweet_potato_sell: false }, 'sell'), false);
     assert.equal(sweetPotatoEnabled({ sweet_potato_sell: false }, 'claim'), true);
+    assert.equal(sweetPotatoEnabled({ sweet_potato_commission: false }, 'commission'), false);
 });
 
 test('sweet potato: 活动 ID 已绑定到活动中心玩法', () => {
@@ -253,4 +349,121 @@ test('sweet potato: 活动 ID 已绑定到活动中心玩法', () => {
     const resolved = resolveActivityGameplays(['2026111707', '2026111708', '2026111709'], bindings);
     assert.equal(resolved.gameplayKey, 'sweetPotato');
     assert.equal(resolved.detailTarget, 'sweetPotato');
+});
+
+test('sweet potato: can_sell=false 的铺子直接换一家，不发 cmd 93', async () => {
+    const types = await loadTypes();
+    const calls = [];
+    const service = createSweetPotatoService(buildDeps({ types, calls, shop: { canSell: false } }));
+    await assert.rejects(
+        () => service.operateSweetPotato('sell', { hostGid: '10002', count: 5, expectedPrice: 12 }),
+        error => error.code === 'SWEET_POTATO_SHOP_CLOSED',
+    );
+    assert.equal(calls.filter(call => call.method === 'Operate'
+        && Number(types.SweetPotatoOperateRequest.decode(call.body).cmd) === 93).length, 0);
+});
+
+test('sweet potato: 回包没带 can_sell 时按可卖处理（三态里的未知不等于拒收）', async () => {
+    const types = await loadTypes();
+    const calls = [];
+    const service = createSweetPotatoService(buildDeps({ types, calls }));
+    const result = await service.operateSweetPotato('sell', { hostGid: '10002', count: 5, expectedPrice: 12 });
+    assert.equal(result.changed, true);
+    assert.equal(result.sold, 5);
+});
+
+test('sweet potato: 自家铺子不占额度，remaining=0 也能一次卖完', async () => {
+    const types = await loadTypes();
+    const calls = [];
+    const service = createSweetPotatoService(buildDeps({
+        types, calls, shop: { remaining: 0 }, bag: { 20307: 3, 1032: 40, 1033: 0 },
+    }));
+    const result = await service.operateSweetPotato('sell', { count: 40 });
+    assert.equal(result.changed, true);
+    assert.equal(result.sold, 40);
+    assert.equal(result.shop.unlimited, true);
+    assert.equal(result.shop.remaining, null);
+});
+
+test('sweet potato: 出售后剩余额度按成交数递减，不把回包 field4 当日上限', async () => {
+    const types = await loadTypes();
+    const calls = [];
+    const service = createSweetPotatoService(buildDeps({ types, calls, shop: { remaining: 50 } }));
+    const result = await service.operateSweetPotato('sell', { hostGid: '10002', count: 20, expectedPrice: 12 });
+    assert.equal(result.shop.remaining, 30);
+});
+
+test('sweet potato: 有提成时发 cmd 99 领取，没提成时不发请求', async () => {
+    const types = await loadTypes();
+    const calls = [];
+    const withCommission = createSweetPotatoService(buildDeps({
+        types, calls, statePatch: { pending_commission: 86, commission_flag: 1 },
+    }));
+    const activity = await withCommission.getSweetPotatoActivity(false);
+    assert.equal(activity.pendingCommission, 86);
+    assert.equal(activity.commissionClaimable, true);
+    const result = await withCommission.operateSweetPotato('commission', {});
+    assert.equal(result.changed, true);
+    assert.equal(result.amount, 86);
+    const claimCalls = calls.filter(call => call.method === 'Operate'
+        && Number(types.SweetPotatoOperateRequest.decode(call.body).cmd) === 99);
+    assert.equal(claimCalls.length, 1);
+
+    const quietCalls = [];
+    const noCommission = createSweetPotatoService(buildDeps({ types, calls: quietCalls }));
+    const empty = await noCommission.operateSweetPotato('commission', {});
+    assert.equal(empty.changed, false);
+    assert.equal(quietCalls.filter(call => call.method === 'Operate'
+        && Number(types.SweetPotatoOperateRequest.decode(call.body).cmd) === 99).length, 0);
+});
+
+test('sweet potato: 兑换目录走 cmd 97，按序号与静态模板归一化', async () => {
+    const types = await loadTypes();
+    const calls = [];
+    const service = createSweetPotatoService(buildDeps({ types, calls }));
+    const catalog = await service.getSweetPotatoShopCatalog();
+    assert.equal(catalog.available, true);
+    const fertilizer = catalog.goods.find(goods => goods.index === 10);
+    assert.equal(fertilizer.itemId, '80001');
+    assert.equal(fertilizer.name, '化肥(1小时)');
+    assert.equal(fertilizer.nameKnown, true);
+    assert.equal(fertilizer.price, '7000');
+    assert.equal(catalog.goods.find(goods => goods.index === 9).name, '萌宠种子礼包');
+    assert.equal(calls.filter(call => call.method === 'Operate'
+        && Number(types.SweetPotatoOperateRequest.decode(call.body).cmd) === 97).length, 1);
+});
+
+test('sweet potato: 价格对不上静态模板时不显示名字，避免展示错商品', async () => {
+    const types = await loadTypes();
+    const service = createSweetPotatoService(buildDeps({
+        types,
+        catalog: [{ index: 10, price: 9999, status: 2, limit: 5 }],
+    }));
+    const catalog = await service.getSweetPotatoShopCatalog();
+    assert.equal(catalog.goods[0].nameKnown, false);
+    assert.equal(catalog.goods[0].itemId, '');
+    assert.match(catalog.goods[0].name, /第 10 档/);
+});
+
+test('sweet potato: 兑换按 cmd 96 下单，超限购与余额不足在本地先拦', async () => {
+    const types = await loadTypes();
+    const calls = [];
+    const service = createSweetPotatoService(buildDeps({ types, calls, statePatch: { coins: 100000 } }));
+    const ok = await service.operateSweetPotato('exchange', { index: 10, count: 2 });
+    assert.equal(ok.changed, true);
+    assert.equal(ok.cost, '14000');
+    const exchangeCalls = calls.filter(call => call.method === 'Operate'
+        && Number(types.SweetPotatoOperateRequest.decode(call.body).cmd) === 96);
+    assert.equal(exchangeCalls.length, 1);
+    assert.equal(String(types.SweetPotatoOperateRequest.decode(exchangeCalls[0].body).exchange.index), '10');
+
+    await assert.rejects(
+        () => service.operateSweetPotato('exchange', { index: 10, count: 4 }),
+        error => error.code === 'SWEET_POTATO_EXCEED_LIMIT',
+    );
+    const poor = createSweetPotatoService(buildDeps({ types, calls: [], statePatch: { coins: 100 } }));
+    await assert.rejects(
+        () => poor.operateSweetPotato('exchange', { index: 10, count: 1 }),
+        error => error.code === 'SWEET_POTATO_INSUFFICIENT_COINS',
+    );
 });

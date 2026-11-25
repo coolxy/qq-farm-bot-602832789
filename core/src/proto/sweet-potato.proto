@@ -35,6 +35,11 @@ message SweetPotatoState {
     int64 base_price = 5;
     int64 bonus_price = 6;
     int64 capacity = 7;
+    // 待领取的收购提成（好友把蜜薯卖进你的铺子后按比例产生）。
+    // 2026-11-25 15:11 抓包实机 86，cmd 99 领取后该字段消失、coins +86；没有提成时字段缺失（不是 0）。
+    int64 pending_commission = 11;
+    // 与 11 同时出现/消失的标记，实机恒为 1，语义未取证。
+    int64 commission_flag = 13;
 }
 
 message SweetPotatoActivity {
@@ -58,15 +63,65 @@ message SweetPotatoSellRequest {
     int64 count = 2;
 }
 
-// cmd 取值：91 领种子 / 92 查铺子 / 93 出售 / 98 分享。
-// 请求体统一是 id + cmd + 与 cmd 对应的 selector（191/192/193/198）。
+// cmd 96 兑换下单：index 为目录序号，count 为兑换数量。
+message SweetPotatoExchangeRequest {
+    int64 index = 1;
+    int64 count = 2;
+}
+
+message SweetPotatoExchangeGrant {
+    int64 item_id = 1;
+    int64 count = 2;
+    int64 field_3 = 3;
+    int64 field_6 = 6;
+    int64 field_7 = 7;
+}
+
+message SweetPotatoExchangeReply {
+    int64 price = 1;
+    SweetPotatoExchangeGrant grant = 2;
+    int64 coins = 3;
+    int64 field_4 = 4;
+    int64 field_5 = 5;
+}
+
+// cmd 97 兑换目录。协议只下发序号/价格/状态/限购，item_id 由客户端静态表映射。
+message SweetPotatoCatalogGoods {
+    int64 index = 1;
+    int64 price = 2;
+    int64 status = 3;
+    int64 limit = 4;
+    // 兑换过之后出现，实机均取 1，疑似今日已兑次数与达上限标记，语义未取证。
+    int64 field_5 = 5;
+    int64 field_6 = 6;
+    int64 field_7 = 7;
+}
+
+message SweetPotatoCatalog {
+    repeated SweetPotatoCatalogGoods goods = 1;
+    // 兑换过之后目录尾部会带福气币余额（实机 27120），与状态槽 field 3 一致。
+    int64 coins = 2;
+}
+
+// cmd 99 领取收购提成。
+message SweetPotatoCommissionReply {
+    int64 amount = 1;
+    int64 field_3 = 3;
+    int64 coins = 4;
+}
+
+// cmd 取值：91 领种子 / 92 查铺 / 93 出售 / 96 兑换下单 / 97 兑换目录 / 98 分享 / 99 领提成。
+// 请求体统一是 id + cmd + 与 cmd 对应的 selector（190 + cmd）。
 message SweetPotatoOperateRequest {
     int64 id = 1;
     int64 cmd = 2;
     SweetPotatoEmpty claim_seed = 191;
     SweetPotatoShopRequest get_shop = 192;
     SweetPotatoSellRequest sell = 193;
+    SweetPotatoExchangeRequest exchange = 196;
+    SweetPotatoEmpty catalog = 197;
     SweetPotatoEmpty share = 198;
+    SweetPotatoEmpty claim_commission = 199;
 }
 
 message SweetPotatoOwner {
@@ -76,16 +131,22 @@ message SweetPotatoOwner {
     int64 level = 4;
 }
 
+// 铺子行情（cmd 92 回包）。字段语义对照实机抓包：
+// 成交价 = base_price + bonus_price，两个字段都不能单独当成交价用（好友 99 + 66 = 165，界面同值）。
 message SweetPotatoShop {
     int64 base_price = 1;
     int64 bonus_price = 2;
+    // 该铺今日还能再收多少（官方 remain_quota）。成交后递减，满额 8000；
+    // 自家铺子不占好友额度，这一项按「不限」处理。
     int64 remaining = 3;
     SweetPotatoOwner owner = 4;
 }
 
 message SweetPotatoShopReply {
     SweetPotatoShop shop = 1;
-    int64 field_2 = 2;
+    // 该铺当前收不收薯：true 可收 / false 明确拒收 / 字段缺失（undefined）按可卖处理。
+    // 对应官方 MapleMarketGetShopRsp 的 can_sell=2；旧版当 int64 且从没读过。
+    bool can_sell = 2;
 }
 
 message SweetPotatoClaimReply {
@@ -96,7 +157,8 @@ message SweetPotatoSellReply {
     int64 count = 1;
     int64 price = 2;
     int64 income = 3;
-    int64 remaining = 4;
+    // 该铺每日接收额度**上限**（实机 8000），不是剩余额度；剩余量要自己按成交数递减。
+    int64 daily_quota = 4;
     int64 coins = 5;
 }
 
@@ -117,5 +179,8 @@ message SweetPotatoOperateReply {
     SweetPotatoClaimReply claim_seed = 191;
     SweetPotatoShopReply get_shop = 192;
     SweetPotatoSellReply sell = 193;
+    SweetPotatoExchangeReply exchange = 196;
+    SweetPotatoCatalog catalog = 197;
     SweetPotatoShareReply share = 198;
+    SweetPotatoCommissionReply claim_commission = 199;
 }

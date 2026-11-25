@@ -8,11 +8,26 @@ interface SweetPotatoShop {
   avatarUrl: string
   price: number | null
   remaining: number | null
+  unlimited?: boolean
+  canSell?: boolean | null
   basePrice?: number
   bonusPrice?: number
   checkedAt: number
   available: boolean
   error: string
+}
+
+interface SweetPotatoGoods {
+  index: number
+  itemId: string
+  name: string
+  nameKnown: boolean
+  price: string
+  status: number
+  limit: number
+  exchangedToday: number
+  image: string
+  exchangeable: boolean
 }
 
 interface SweetPotatoActivity {
@@ -25,6 +40,8 @@ interface SweetPotatoActivity {
   price: number
   coins: number
   capacity: number
+  pendingCommission: number
+  commissionClaimable: boolean
   seeds: number
   honey: number
   coinsInBag: number
@@ -49,18 +66,23 @@ const shopsOffset = ref(0)
 const shopsHasMore = ref(false)
 const shopsOpen = ref(false)
 
-const catalog = ref<any[]>([])
+const catalog = ref<SweetPotatoGoods[]>([])
 const catalogLoading = ref(false)
 const catalogMessage = ref('')
 const catalogOpen = ref(false)
+const catalogCounts = ref<Record<number, number>>({})
 
 const sellTarget = ref<SweetPotatoShop | null>(null)
 const sellCount = ref(1)
 
 const honey = computed(() => Number(activity.value?.honey || 0))
 const canSell = computed(() => !!activity.value?.active && honey.value > 0)
+const pendingCommission = computed(() => Number(activity.value?.pendingCommission || 0))
 const maxSellForTarget = computed(() => {
   if (!sellTarget.value)
+    return honey.value
+  // 自家铺子不占好友额度，上限只看背包。
+  if (sellTarget.value.unlimited)
     return honey.value
   const remaining = Number(sellTarget.value.remaining || 0)
   return Math.max(0, Math.min(honey.value, remaining))
@@ -122,6 +144,10 @@ async function act(action: string, payload: Record<string, unknown> = {}) {
       sellTarget.value = null
       await loadShops(true)
     }
+    if (action === 'exchange')
+      await loadCatalog()
+    if (action === 'commission')
+      await load()
   }
   catch (err: any) {
     error.value = messageOf(err)
@@ -165,6 +191,10 @@ async function loadCatalog() {
     catalog.value = Array.isArray(data.goods) ? data.goods : []
     catalogMessage.value = String(data.message || '')
     catalogOpen.value = true
+    const next: Record<number, number> = {}
+    for (const goods of catalog.value)
+      next[goods.index] = catalogCounts.value[goods.index] || 1
+    catalogCounts.value = next
   }
   catch (err: any) {
     catalogMessage.value = messageOf(err)
@@ -174,11 +204,24 @@ async function loadCatalog() {
   }
 }
 
+function catalogCount(index: number) {
+  return Math.max(1, Number(catalogCounts.value[index]) || 1)
+}
+
+function catalogCost(goods: SweetPotatoGoods) {
+  return Number(goods.price || 0) * catalogCount(goods.index)
+}
+
+async function exchangeGoods(goods: SweetPotatoGoods) {
+  await act('exchange', { index: goods.index, count: catalogCount(goods.index) })
+}
+
 function openSell(shop: SweetPotatoShop) {
   if (!shop.available || !shop.price)
     return
   sellTarget.value = shop
-  sellCount.value = Math.max(1, Math.min(honey.value, Number(shop.remaining) || 1))
+  const limit = shop.unlimited ? honey.value : Number(shop.remaining) || 1
+  sellCount.value = Math.max(1, Math.min(honey.value, limit))
 }
 
 async function confirmSell() {
@@ -204,6 +247,7 @@ watch(() => props.accountId, () => {
   activity.value = null
   shops.value = []
   catalog.value = []
+  catalogCounts.value = {}
   sellTarget.value = null
   load()
 }, { immediate: false })
@@ -257,6 +301,11 @@ onMounted(load)
             <strong class="sp-metric-value">{{ activity.capacity }}</strong>
             <span class="sp-metric-hint">截至 {{ formatTime(activity.endTime) }}</span>
           </div>
+          <div class="sp-metric" :class="{ highlight: pendingCommission > 0 }">
+            <span class="sp-metric-label">待领提成</span>
+            <strong class="sp-metric-value">{{ pendingCommission }}</strong>
+            <span class="sp-metric-hint">{{ pendingCommission > 0 ? '好友收购分红' : '暂无可领' }}</span>
+          </div>
         </div>
 
         <div class="sp-actions">
@@ -268,6 +317,9 @@ onMounted(load)
           </button>
           <button type="button" class="sp-btn primary" :disabled="busy || !canSell" @click="sellToSelf">
             一键卖给自己铺子
+          </button>
+          <button type="button" class="sp-btn" :disabled="busy || !pendingCommission" @click="act('commission')">
+            {{ pendingCommission ? `领取提成 ${pendingCommission}` : '暂无提成' }}
           </button>
         </div>
 
@@ -302,7 +354,7 @@ onMounted(load)
                 <span v-else class="sp-shop-error">{{ shop.error || '暂不可用' }}</span>
               </div>
               <div class="sp-shop-side">
-                <span v-if="shop.available">余量 {{ shop.remaining }}</span>
+                <span v-if="shop.available">{{ shop.unlimited ? '还可收 不限' : `余量 ${shop.remaining}` }}</span>
                 <button type="button" class="sp-link" :disabled="busy || !shop.available || !honey" @click="openSell(shop)">
                   出售
                 </button>
@@ -356,13 +408,32 @@ onMounted(load)
             {{ catalogMessage || '商店目录为空' }}
           </p>
           <ul v-else-if="catalog.length" class="sp-shops">
-            <li v-for="goods in catalog" :key="goods.id" class="sp-shop">
+            <li v-for="goods in catalog" :key="goods.index" class="sp-shop">
               <div class="sp-shop-main">
-                <strong>{{ goods.name || `商品 ${goods.id}` }}</strong>
-                <span>消耗 {{ goods.costCount }} 福气币 · 限购 {{ goods.limit || '不限' }}</span>
+                <strong>{{ goods.name }}</strong>
+                <span>
+                  {{ goods.price }} 福气币 / 个 · 限购 {{ goods.limit || '不限' }}
+                  <template v-if="goods.exchangedToday"> · 已兑 {{ goods.exchangedToday }}</template>
+                </span>
+                <span v-if="!goods.nameKnown" class="sp-shop-error">该档价格与本地配置不一致，请以实际到手道具为准</span>
               </div>
               <div class="sp-shop-side">
-                <span v-if="goods.bought">已兑 {{ goods.bought }}</span>
+                <input
+                  v-model.number="catalogCounts[goods.index]"
+                  class="sp-shop-count"
+                  type="number"
+                  min="1"
+                  :max="goods.limit || undefined"
+                  inputmode="numeric"
+                >
+                <button
+                  type="button"
+                  class="sp-link"
+                  :disabled="busy || !activity.actions?.exchange?.available || !goods.exchangeable"
+                  @click="exchangeGoods(goods)"
+                >
+                  兑换 {{ catalogCost(goods) }}
+                </button>
               </div>
             </li>
           </ul>
@@ -436,7 +507,7 @@ onMounted(load)
 
 .sp-overview {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -448,6 +519,11 @@ onMounted(load)
   border: 1px solid var(--ui-border, rgba(0, 0, 0, 0.08));
   border-radius: 14px;
   background: var(--ui-surface, rgba(255, 255, 255, 0.72));
+}
+
+.sp-metric.highlight {
+  border-color: rgba(198, 122, 43, 0.45);
+  background: rgba(198, 122, 43, 0.1);
 }
 
 .sp-metric-label {
@@ -597,6 +673,16 @@ onMounted(load)
   opacity: 0.85;
 }
 
+.sp-shop-count {
+  width: 64px;
+  padding: 4px 8px;
+  font-size: 12px;
+  border: 1px solid var(--ui-border, rgba(0, 0, 0, 0.12));
+  border-radius: 8px;
+  background: var(--ui-surface, rgba(255, 255, 255, 0.9));
+  color: inherit;
+}
+
 .sp-sell {
   display: grid;
   gap: 8px;
@@ -664,6 +750,12 @@ onMounted(load)
   margin: 8px 0 0;
   line-height: 1.7;
   opacity: 0.75;
+}
+
+@media (max-width: 1180px) {
+  .sp-overview {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 767px) {

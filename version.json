@@ -1,12 +1,20 @@
 {
   "major": 3,
   "minor": 37,
-  "patch": 0,
-  "build": 263,
-  "version": "3.37.0",
-  "updatedAt": "2026-11-25T10:04:23.043Z",
+  "patch": 1,
+  "build": 265,
+  "version": "3.37.1",
+  "updatedAt": "2026-11-25T10:53:34.923Z",
   "lastCommit": "—",
   "history": [
+    {
+      "version": "3.37.1",
+      "build": 265,
+      "date": "2026-11-25",
+      "summary": "修复以薯换福兑换协议与自家铺子额度，补上提成领取",
+      "commit": "—",
+      "type": "patch"
+    },
     {
       "version": "3.37.0",
       "build": 263,

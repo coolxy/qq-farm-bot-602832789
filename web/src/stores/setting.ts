@@ -90,6 +90,7 @@ export interface AutomationConfig {
   sweet_potato_plant?: boolean
   sweet_potato_sell?: boolean
   sweet_potato_share?: boolean
+  sweet_potato_commission?: boolean
   // 七夕
   qixi_dew_use?: boolean
   qixi_bridge_build?: boolean

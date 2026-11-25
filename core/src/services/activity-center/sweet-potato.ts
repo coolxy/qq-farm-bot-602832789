@@ -11,13 +11,13 @@ export {};
 const {
     SWEET_POTATO,
     SWEET_POTATO_COMMANDS,
+    SWEET_POTATO_CATALOG_TEMPLATE,
+    SWEET_POTATO_SHOP_DAILY_QUOTA,
     sweetPotatoEnabled,
     isSweetPotatoPlant,
 } = require('../../config/sweet-potato');
 
 const SERVICE = 'gamepb.activitypb.ActivityService';
-const EXCHANGE_SHOP_OPERATE_TYPE = 1;
-const QUERY_SHOP_OPERATE_TYPE = 7;
 const RETRY_COOLDOWN_SEC = 300;
 const SHOP_CACHE_TTL_MS = 30000;
 const SHOP_PAGE_SIZE = 5;
@@ -123,10 +123,11 @@ function createSweetPotatoService(deps: any) {
         }
     }
 
-    function toDto(data: any, bag: { seeds: number; honey: number; coins: number }, shopAvailable: boolean | null = null): any {
+    function toDto(data: any, bag: { seeds: number; honey: number; coins: number }, catalogAvailable: boolean | null = null): any {
         const state = data.entry.state || {};
         const basePrice = int64Number(state.base_price);
         const bonusPrice = int64Number(state.bonus_price);
+        const pendingCommission = int64Number(state.pending_commission);
         return {
             activityId: SWEET_POTATO.activityId,
             groupId: SWEET_POTATO.groupId,
@@ -143,31 +144,50 @@ function createSweetPotatoService(deps: any) {
             price: basePrice + bonusPrice,
             coins: int64Number(state.coins),
             capacity: int64Number(state.capacity),
+            pendingCommission,
+            commissionClaimable: !!data.active && pendingCommission > 0,
             seeds: bag.seeds,
             honey: bag.honey,
             coinsInBag: bag.coins,
-            shopAvailable,
+            shopAvailable: catalogAvailable,
+            catalogAvailable,
             rules: rulesOf(data.entry),
             actions: {
                 claim: { enabled: !state.claims?.seed_claimed, available: !state.claims?.seed_claimed },
                 share: { enabled: !state.claims?.share_claimed, available: !state.claims?.share_claimed },
                 sell: { enabled: bag.honey > 0, available: bag.honey > 0 },
-                exchange: { enabled: shopAvailable === true, available: shopAvailable === true },
+                // 兑换只看活动期：目录要现查，不能因为快照没带目录就把按钮打回不可点。
+                exchange: { enabled: !!data.active, available: !!data.active, catalogAvailable },
+                commission: { enabled: pendingCommission > 0, available: pendingCommission > 0 },
             },
         };
     }
 
-    async function rpc(action: keyof typeof SWEET_POTATO_COMMANDS, params: any = {}, timeoutMs?: number): Promise<any> {
+    /**
+     * 发一次 Operate 并核对回包骨架。
+     *
+     * 写操作（claim/share/sell/exchange/commission）必须同时带回
+     * `activity.head.id` 与 `activity.state`，否则按「结果不明」处理；
+     * 只读的 cmd 97（兑换目录）在活动未进期时可能不带状态，允许放宽。
+     */
+    async function rpc(
+        action: keyof typeof SWEET_POTATO_COMMANDS,
+        params: any = {},
+        timeoutMs?: number,
+        options: { requireState?: boolean } = {},
+    ): Promise<any> {
         const operation = SWEET_POTATO_COMMANDS[action];
+        const requireState = options.requireState !== false;
         const payload: any = { id: SWEET_POTATO.activityId, cmd: operation.cmd, [operation.field]: params };
         const body = Buffer.from(types.SweetPotatoOperateRequest.encode(types.SweetPotatoOperateRequest.create(payload)).finish());
         const { body: replyBody } = await sendMsgAsync(SERVICE, 'Operate', body, timeoutMs ? { timeoutMs } : undefined);
         const reply = types.SweetPotatoOperateReply.decode(replyBody);
+        const stateOk = !requireState
+            || (int64String(reply?.activity?.head?.id) === SWEET_POTATO.activityId && !!reply?.activity?.state);
         if (int64String(reply?.id) !== SWEET_POTATO.activityId
             || int64Number(reply?.cmd) !== operation.cmd
             || !reply?.[operation.field]
-            || int64String(reply?.activity?.head?.id) !== SWEET_POTATO.activityId
-            || !reply?.activity?.state) {
+            || !stateOk) {
             throw businessError('SWEET_POTATO_RESULT_UNKNOWN', '操作回包未能确认，请刷新活动，勿重复提交');
         }
         return reply;
@@ -193,17 +213,26 @@ function createSweetPotatoService(deps: any) {
         if (String(shop?.owner?.gid || '') !== hostGid || !price) {
             throw businessError('SWEET_POTATO_RESULT_UNKNOWN', '无法确认选中铺子的主人及收购价，本次未出售');
         }
+        // can_sell 三态：true 可收 / false 明确拒收 / 字段缺失按可卖处理。
+        // protobufjs 的 decode 不会给缺失字段补默认值，所以用 hasOwnProperty 区分「明确 false」与「没下发」。
+        const canSellKnown = Object.prototype.hasOwnProperty.call(reply.get_shop, 'can_sell');
+        const canSell = canSellKnown ? !!reply.get_shop.can_sell : null;
+        const unlimited = hostGid === selfGid();
         return {
             hostGid,
-            name: String(friend?.name || shop.owner?.name || '好友铺子'),
+            name: unlimited ? '自己的铺子' : String(friend?.name || shop.owner?.name || '好友铺子'),
             avatarUrl: String(friend?.avatarUrl || shop.owner?.avatar || ''),
             basePrice: int64Number(shop.base_price),
             bonusPrice: int64Number(shop.bonus_price),
             price,
-            remaining: int64Number(shop.remaining),
+            // 自家铺子不占好友额度，remaining 对它是「不限」，不能用 0 去拦。
+            remaining: unlimited ? null : int64Number(shop.remaining),
+            unlimited,
+            canSell,
+            dailyQuota: SWEET_POTATO_SHOP_DAILY_QUOTA,
             checkedAt: now() * 1000,
-            available: true,
-            error: '',
+            available: canSell !== false,
+            error: canSell === false ? '该铺子当前不收蜜薯' : '',
         };
     }
 
@@ -218,7 +247,7 @@ function createSweetPotatoService(deps: any) {
         let shopAvailable: boolean | null = null;
         if (fetchShop && data.active) {
             try {
-                const catalog = await queryShopCatalog();
+                const catalog = await queryCatalog();
                 shopAvailable = !!catalog && catalog.goods.length > 0;
             } catch {
                 shopAvailable = false;
@@ -229,14 +258,16 @@ function createSweetPotatoService(deps: any) {
 
     /** 兑换商店目录（面板专用；不在活动快照里顺带查，避免拖慢每轮快照）。 */
     async function getSweetPotatoShopCatalog(): Promise<any> {
-        const catalog = await queryShopCatalog();
+        const catalog = await queryCatalog();
         if (!catalog) {
-            return { available: false, goods: [], message: '兑换商店暂未开放，或当前版本尚未确认商店协议' };
+            return { available: false, goods: [], message: '兑换目录暂不可用，请稍后重试' };
         }
+        const goods = normalizeCatalog(catalog);
         return {
-            available: catalog.goods.length > 0,
-            goods: normalizeCatalog(catalog),
-            message: catalog.goods.length > 0 ? '' : '商店目录为空',
+            available: goods.length > 0,
+            goods,
+            coins: int64String(catalog.catalog?.coins || '0'),
+            message: goods.length > 0 ? '' : '本期兑换目录为空',
         };
     }
 
@@ -273,6 +304,8 @@ function createSweetPotatoService(deps: any) {
                         avatarUrl: String(friend.avatarUrl || ''),
                         price: null,
                         remaining: null,
+                        unlimited: false,
+                        canSell: null,
                         checkedAt: now() * 1000,
                         available: false,
                         error: '暂无法读取该铺子，请稍后重试',
@@ -290,60 +323,84 @@ function createSweetPotatoService(deps: any) {
         }
     }
 
-    /** 兑换商店目录：只读查询，失败按「未开放」处理，不影响主活动。 */
-    async function queryShopCatalog(): Promise<any | null> {
-        const body = Buffer.from(types.QueryActivityRequest.encode(types.QueryActivityRequest.create({
-            activity_id: SWEET_POTATO.shopActivityId,
-            operate_type: QUERY_SHOP_OPERATE_TYPE,
-        })).finish());
-        let reply: any;
+    /**
+     * 兑换目录（cmd 97，只读）。
+     *
+     * 早期按「通用兑换商店」用 QueryActivityRequest 打 2026111709，回包永远是空目录：
+     * 实机抓包里副模块 2026111709 的 field 117 始终为空，真正的目录挂在主活动上。
+     * 活动未进期时服务端可能不带状态，所以这里放宽 rpc 的状态校验。
+     */
+    async function queryCatalog(): Promise<any | null> {
         try {
-            const { body: replyBody } = await sendMsgAsync(SERVICE, 'Operate', body, { timeoutMs: 8000 });
-            reply = types.ActivityOperateReply.decode(replyBody);
+            const reply = await rpc('catalog', {}, 8000, { requireState: false });
+            return { goods: Array.isArray(reply?.catalog?.goods) ? reply.catalog.goods : [], catalog: reply.catalog };
         } catch {
             return null;
         }
-        const goods = reply?.data?.catalog?.goods;
-        if (int64String(reply?.activity_id) !== SWEET_POTATO.shopActivityId || !Array.isArray(goods)) return null;
-        return { goods, raw: reply.data };
     }
 
+    /** 目录归一化：协议只给序号/价格/状态/限购，名称与 item_id 走静态模板对上价格才认。 */
     function normalizeCatalog(catalog: any): any[] {
-        return (catalog?.goods || []).map((entry: any) => ({
-            id: int64String(entry?.goods_id),
-            itemId: int64String(entry?.item?.id),
-            name: String(entry?.item?.name || ''),
-            count: int64Number(entry?.item?.count) || 1,
-            costItemId: int64String(entry?.cost?.item_id),
-            costCount: int64String(entry?.cost?.count),
-            limit: int64Number(entry?.limit),
-            bought: int64Number(entry?.bought),
-            exchangeable: entry?.exchangeable !== false,
-        }));
+        return (catalog?.goods || []).map((entry: any) => {
+            const index = int64Number(entry?.index);
+            const price = int64String(entry?.price);
+            const template = SWEET_POTATO_CATALOG_TEMPLATE[index];
+            const nameKnown = !!template && template.price === price;
+            const itemId = nameKnown ? template.itemId : '';
+            const limit = int64Number(entry?.limit);
+            const exchangedToday = int64Number(entry?.field_5);
+            return {
+                index,
+                itemId,
+                name: nameKnown ? template.name : `第 ${index} 档`,
+                nameKnown,
+                price,
+                status: int64Number(entry?.status),
+                limit,
+                exchangedToday,
+                image: itemId ? String(itemDto({ item_id: itemId, count: 1 })?.image || '') : '',
+                // 服务端不再下发 exchangeable，能否兑换由价格、限购与余额决定，最终以下单回包为准。
+                exchangeable: price !== '0',
+            };
+        });
     }
 
+    /** 兑换下单（cmd 96）。index 是目录序号，count 是数量。 */
     async function exchangeSweetPotatoGoods(input: any = {}): Promise<any> {
-        const goodsId = positiveDecimal(input?.goodsId, 'INVALID_SWEET_POTATO_GOODS', 'goodsId');
-        const count = positiveDecimal(input?.count, 'INVALID_SWEET_POTATO_COUNT', 'count');
         return serializeMutation(async () => {
-            assertCanOperate('sell', false);
-            const catalog = await queryShopCatalog();
-            if (!catalog) throw businessError('SWEET_POTATO_SHOP_UNAVAILABLE', '兑换商店暂未开放，或当前版本尚未确认商店协议');
-            const goods = normalizeCatalog(catalog).find(entry => entry.id === goodsId);
-            if (!goods) throw businessError('SWEET_POTATO_GOODS_NOT_FOUND', '兑换商店中未找到指定商品');
-            if (!goods.exchangeable) throw businessError('SWEET_POTATO_GOODS_UNAVAILABLE', '该商品当前不可兑换');
-            const body = Buffer.from(types.ExchangeShopRequest.encode(types.ExchangeShopRequest.create({
-                activity_id: SWEET_POTATO.shopActivityId,
-                operate_type: EXCHANGE_SHOP_OPERATE_TYPE,
-                exchange_shop_operate: { goods_id: goodsId, count },
-            })).finish());
-            const { body: replyBody } = await sendMsgAsync(SERVICE, 'Operate', body, { timeoutMs: 15000 });
-            const reply = types.ActivityOperateReply.decode(replyBody);
-            if (int64String(reply?.activity_id) !== SWEET_POTATO.shopActivityId
-                || int64Number(reply?.operate_type) !== EXCHANGE_SHOP_OPERATE_TYPE) {
-                throw businessError('SWEET_POTATO_RESULT_UNKNOWN', '兑换回包未能确认，请刷新商店核对，勿重复提交');
+            assertCanOperate(null, false);
+            const index = positiveDecimal(input?.index ?? input?.goodsId, 'INVALID_SWEET_POTATO_INDEX', 'index');
+            const count = positiveDecimal(input?.count ?? 1, 'INVALID_SWEET_POTATO_COUNT', 'count');
+            const data = await getGroup();
+            if (!data.active) throw businessError('SWEET_POTATO_INACTIVE', '以薯换福活动未开放或已结束');
+            const catalog = await getSweetPotatoShopCatalog();
+            const goods = catalog.goods.find((entry: any) => String(entry.index) === index);
+            if (!goods) throw businessError('SWEET_POTATO_GOODS_NOT_FOUND', '兑换目录里没有这一档商品');
+            if (!goods.exchangeable) throw businessError('SWEET_POTATO_GOODS_UNAVAILABLE', '该档商品当前不可兑换');
+            const cost = BigInt(goods.price) * BigInt(count);
+            if (goods.limit > 0 && BigInt(count) > BigInt(goods.limit)) {
+                throw businessError('SWEET_POTATO_EXCEED_LIMIT', `该档剩余可兑换 ${goods.limit} 次，本次选择了 ${count} 次`);
+            }
+            const before = BigInt(int64String(data.entry.state?.coins || '0'));
+            if (before > 0n && before < cost) {
+                throw businessError('SWEET_POTATO_INSUFFICIENT_COINS', `福气币不足，需要 ${cost}，当前 ${before}`);
+            }
+            const reply = await rpc('exchange', { index, count }, 15000);
+            const result = reply.exchange;
+            if (int64String(result?.price) !== goods.price) {
+                throw businessError('SWEET_POTATO_RESULT_UNKNOWN', '兑换回包单价与目录不一致，请刷新目录核对');
+            }
+            if (result?.grant && int64String(result.grant.count) !== count) {
+                throw businessError('SWEET_POTATO_RESULT_UNKNOWN', '兑换回包数量与请求不一致，请刷新核对');
             }
             return {
+                changed: true,
+                index: Number(index),
+                count: int64String(result?.grant?.count ?? count),
+                itemId: int64String(result?.grant?.item_id ?? goods.itemId),
+                price: goods.price,
+                cost: cost.toString(),
+                coins: int64String(result?.coins ?? ''),
                 message: `已兑换「${goods.name}」×${count}`,
                 snapshot: await getActivityCenterSnapshot(),
             };
@@ -438,10 +495,14 @@ function createSweetPotatoService(deps: any) {
         if (!canContinue()) throw businessError('SWEET_POTATO_STOPPED', '自动化已停止');
         const shop = await queryShop(owner, friend);
         shopCache.set(owner, shop);
+        if (shop.canSell === false) {
+            throw businessError('SWEET_POTATO_SHOP_CLOSED', '该铺子当前不收蜜薯，请换一家');
+        }
         if (input?.expectedPrice !== undefined && input.expectedPrice !== shop.price) {
             throw businessError('SWEET_POTATO_PRICE_CHANGED', `收购价已变为 ${shop.price}，本次未出售，请重新查询并确认`);
         }
-        if (requested > shop.remaining) {
+        // 自家铺子不占好友额度（remaining 为 null），只有好友铺子才按剩余量拦。
+        if (!shop.unlimited && shop.remaining !== null && requested > shop.remaining) {
             throw businessError('SWEET_POTATO_CAPACITY_EXCEEDED', `该铺子剩余收购量为 ${shop.remaining}，本次未出售`);
         }
         if (!Number.isSafeInteger(requested * shop.price)) {
@@ -457,7 +518,12 @@ function createSweetPotatoService(deps: any) {
             throw businessError('SWEET_POTATO_RESULT_UNKNOWN', '出售回包与数量或价格不一致，请刷新核对');
         }
         retryAfter.delete(action);
-        const updatedShop = { ...shop, remaining: int64Number(sale.remaining), checkedAt: now() * 1000 };
+        // 回包的 field 4 是该铺每日「上限」（实机 8000），不是剩余量；剩余量只能自己按成交数递减。
+        const updatedShop = {
+            ...shop,
+            remaining: shop.unlimited ? null : Math.max(0, (shop.remaining || 0) - requested),
+            checkedAt: now() * 1000,
+        };
         shopCache.set(owner, updatedShop);
         return {
             changed: true,
@@ -468,11 +534,45 @@ function createSweetPotatoService(deps: any) {
         };
     }
 
+    /**
+     * 领取收购提成（cmd 99）。
+     *
+     * 提成来自「好友把蜜薯卖进你的铺子」，状态槽 130.11 是待领金额，
+     * 领完该字段消失、福气币 +amount。没得领就返回 changed=false，不发写请求。
+     */
+    async function claimCommission(automatic = false): Promise<any> {
+        assertCanOperate('commission', automatic);
+        return serializeMutation(async () => {
+            if ((retryAfter.get('commission') || 0) > now()) {
+                throw businessError('SWEET_POTATO_COOLDOWN', '上一次提成领取结果正在核对，请稍后刷新再试');
+            }
+            const data = await getGroup();
+            if (!data.active) throw businessError('SWEET_POTATO_INACTIVE', '以薯换福活动未开放或已结束');
+            const pending = int64Number(data.entry.state?.pending_commission);
+            if (pending <= 0) return { changed: false, message: '当前没有可领取的收购提成' };
+            retryAfter.set('commission', now() + RETRY_COOLDOWN_SEC);
+            const reply = await rpc('commission', {}, 15000);
+            const result = reply.claim_commission;
+            const amount = int64Number(result?.amount);
+            if (amount <= 0) {
+                throw businessError('SWEET_POTATO_RESULT_UNKNOWN', '提成领取回包金额为 0，请刷新核对');
+            }
+            retryAfter.delete('commission');
+            return {
+                changed: true,
+                amount,
+                coins: int64String(result?.coins || ''),
+                message: `已领取收购提成 ${amount} 福气币`,
+            };
+        });
+    }
+
     async function operateSweetPotato(action: string, input: any = {}): Promise<any> {
-        if (!['claim', 'share', 'sell', 'exchange'].includes(action)) {
+        if (!['claim', 'share', 'sell', 'exchange', 'commission'].includes(action)) {
             throw businessError('INVALID_SWEET_POTATO_ACTION', '不支持的以薯换福操作');
         }
         if (action === 'exchange') return exchangeSweetPotatoGoods(input);
+        if (action === 'commission') return claimCommission(false);
 
         const requestId = action === 'sell' ? input?.requestId : undefined;
         let signature = '';
@@ -536,6 +636,15 @@ function createSweetPotatoService(deps: any) {
         if (!data.active) return false;
         if (int64Number(data.entry.state.bonus_price) <= 0) return false;
         const result = await mutate('sell', {}, true);
+        return !!result.changed;
+    }
+
+    async function autoClaimCommission(): Promise<boolean> {
+        if (!alive() || !enabled('commission')) return false;
+        const data = await getGroup();
+        if (!data.active) return false;
+        if (int64Number(data.entry.state?.pending_commission) <= 0) return false;
+        const result = await claimCommission(true);
         return !!result.changed;
     }
 
@@ -618,9 +727,11 @@ function createSweetPotatoService(deps: any) {
         getSweetPotatoShops,
         operateSweetPotato,
         exchangeSweetPotatoGoods,
+        claimCommission,
         autoClaim,
         autoShare,
         autoSell,
+        autoClaimCommission,
         plantEmptyLands,
         runCropCycle,
         isSweetPotatoActive: async (): Promise<boolean> => {

@@ -420,6 +420,13 @@ function buildActivityDirectory(windows: any[], season: any, shop: any, solarTer
     }));
 }
 
+// 快照函数在下面几行就要用到它，实例化必须放在快照函数之前（依赖全是函数声明，可安全前移）。
+const sweetPotatoService = createSweetPotatoService({
+    types, sendMsgAsync, getBag, getBagItems, getServerTimeSec, itemDto,
+    int64String, int64Number, businessError, positiveDecimal,
+    serializeMutation, getActivityCenterSnapshot,
+});
+
 async function buildActivityCenterSnapshot(shopOverride: any = null) {
     // 星座 type=21 是写操作，读取快照只能使用赛季发现信息和最近一次写操作回包。
     // Gateway calls are intentionally serial. The game connection can stop
@@ -545,12 +552,6 @@ const petDiaryService = createPetDiaryService({
     serializeMutation, getCurrentSolarTerms,
 });
 
-const sweetPotatoService = createSweetPotatoService({
-    types, sendMsgAsync, getBag, getBagItems, getServerTimeSec, itemDto,
-    int64String, int64Number, businessError, positiveDecimal,
-    serializeMutation, getActivityCenterSnapshot,
-});
-
 function serializeMutation<T>(operation: () => Promise<T>): Promise<T> {
     const result = mutationTail.then(operation, operation);
     mutationTail = result.then(() => undefined, () => undefined);
@@ -607,9 +608,11 @@ module.exports = {
     getSweetPotatoShops: sweetPotatoService.getSweetPotatoShops,
     operateSweetPotato: sweetPotatoService.operateSweetPotato,
     exchangeSweetPotatoGoods: sweetPotatoService.exchangeSweetPotatoGoods,
+    sweetPotatoClaimCommission: sweetPotatoService.claimCommission,
     sweetPotatoAutoClaim: sweetPotatoService.autoClaim,
     sweetPotatoAutoShare: sweetPotatoService.autoShare,
     sweetPotatoAutoSell: sweetPotatoService.autoSell,
+    sweetPotatoAutoClaimCommission: sweetPotatoService.autoClaimCommission,
     sweetPotatoRunCropCycle: sweetPotatoService.runCropCycle,
     sweetPotatoPlantEmptyLands: sweetPotatoService.plantEmptyLands,
     sweetPotatoIsActive: sweetPotatoService.isSweetPotatoActive,
