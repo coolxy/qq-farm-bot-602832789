@@ -29,6 +29,16 @@ const RECORD_LIST_LIMIT = 30;
 const SCAN_MAX_LIMIT = 100;
 /** 比价时的并发数：4 个一批，和界面一次查一页的感觉接近。 */
 const SCAN_CONCURRENCY = 4;
+/** 面板比价结果的短缓存：cmd 92 是实时行情，这层只为防连点刷屏，force 可跳过。 */
+const FRIEND_SCAN_TTL_MS = 3 * 60 * 1000;
+/** 背包余额的内存有效期：超过这个时间但还没刷新时，快照会顺手在后台补一次。 */
+const BALANCE_CACHE_TTL_MS = 10 * 1000;
+/**
+ * 背包连续读取失败时，最多沿用多久之前的成功值。
+ * 余额变化只发生在本次进程内的几个写操作上（写操作后都会强制刷新缓存），
+ * 所以 10 分钟内的旧值仍然可信，比把界面刷成「--」更有用。
+ */
+const BALANCE_STALE_MAX_MS = 10 * 60 * 1000;
 /** 单轮自动卖薯最多切换几家铺子：每卖一家都是一次 cmd 93 写，铺子越多越像脚本。 */
 const SELL_MAX_SHOPS_PER_RUN = 3;
 /** 相邻两笔出售之间的间隔，避免连着发写请求。 */
@@ -75,6 +85,8 @@ function createSweetPotatoService(deps: any) {
     const sales = new Map<string, { signature: string; expiresAt: number; promise: Promise<any> }>();
     /** 比价结果缓存：自动卖薯按配置间隔复用同一份排序，不用每轮把好友扫一遍。 */
     let scanCache: { at: number; limit: number; shops: any[] } | null = null;
+    /** 面板比价缓存（3 分钟，force 跳过）；和自动卖薯那份分开，免得互相顶掉节奏。 */
+    let panelScanCache: { at: number; limit: number; data: any } | null = null;
     /** 自动化相邻两笔出售的间隔；测试注入 0 免得白等。 */
     const stepSpacerMs = Number.isFinite(Number(deps.stepSpacerMs)) ? Math.max(0, Number(deps.stepSpacerMs)) : SELL_STEP_SPACER_MS;
 
@@ -142,16 +154,125 @@ function createSweetPotatoService(deps: any) {
         return { group, entry, active, start, end };
     }
 
+    /** 背包余额：以物品 ID 为键的数量表。 */
+    type Balances = Map<string, number>;
+
+    /** 只取活动关心的三件道具，其余背包内容不参与活动快照。 */
+    function readBalances(bag: any): Balances {
+        const items = getBagItems(bag) || [];
+        const map: Balances = new Map();
+        for (const id of [SWEET_POTATO.seedId, SWEET_POTATO.honeyId, SWEET_POTATO.coinId]) {
+            map.set(String(id), 0);
+        }
+        for (const item of items) {
+            const key = String(item?.id ?? '');
+            if (!map.has(key)) continue;
+            map.set(key, (map.get(key) || 0) + (Number(item?.count) || 0));
+        }
+        return map;
+    }
+
+    /**
+     * 一次性读背包（自动化判断"还有没有蜜薯/种子"用）。
+     * 活动快照**不走这条**，见下面的 refreshBalances / currentBalances。
+     */
     async function inventory(): Promise<{ seeds: number; honey: number; coins: number }> {
-        const items = getBagItems(await getBag());
-        const count = (id: number): number => (items || [])
-            .filter((item: any) => Number(item?.id) === id)
-            .reduce((total: number, item: any) => total + (Number(item?.count) || 0), 0);
+        const map = readBalances(await getBag());
         return {
-            seeds: count(SWEET_POTATO.seedId),
-            honey: count(SWEET_POTATO.honeyId),
-            coins: count(SWEET_POTATO.coinId),
+            seeds: map.get(String(SWEET_POTATO.seedId)) || 0,
+            honey: map.get(String(SWEET_POTATO.honeyId)) || 0,
+            coins: map.get(String(SWEET_POTATO.coinId)) || 0,
         };
+    }
+
+    /**
+     * 余额读取改成「快照永不等待 + 后台单飞刷新」两条通道。
+     *
+     * 背景：Bag 排在活动请求队列的末尾，网关并发一满就被挤掉。之前快照里同步读背包，
+     * 一次抖动既拖慢快照又只能拿到 0；更糟的是页面挂载和轮询会并发打两个快照，
+     * 后一个失败就覆盖前一个的成功结果，表现就是「刚刷新有数字、几秒后整排变 0」。
+     *
+     * 现在只有 refreshBalances 一个通道打网关（同一时刻只有一个在途），结果写进内存；
+     * 快照只同步读内存，并发快照读的是同一份状态，不可能互相覆盖。
+     */
+    let lastGoodBalances: { at: number; data: Balances } | null = null;
+    /** 本次数字是上一次成功值（不是刚读到的真值）。 */
+    let balanceStale = false;
+    /** 最近一次读取失败的原因，随快照下发给前端显示。 */
+    let lastBalanceError = '';
+    let balanceRefreshing: Promise<Balances | null> | null = null;
+    let lastBalanceLogAt = 0;
+    let lastBalanceLoggedError = '';
+
+    /** 同一类失败 5 分钟只记一条，避免把日志刷爆后反而看不到别的信息。 */
+    function logBalanceFailure(): void {
+        try {
+            const at = Date.now();
+            if (lastBalanceLoggedError !== lastBalanceError || at - lastBalanceLogAt > 5 * 60 * 1000) {
+                lastBalanceLoggedError = lastBalanceError;
+                lastBalanceLogAt = at;
+                require('../../utils/utils').logWarn('以薯换福背包读取失败', { error: lastBalanceError });
+            }
+        } catch {
+            // 日志失败不影响主流程
+        }
+    }
+
+    /** 最近一次成功值还能不能用（10 分钟内的旧值仍然比「--」有用）。 */
+    function freshFallback(): boolean {
+        return !!lastGoodBalances && Date.now() - lastGoodBalances.at <= BALANCE_STALE_MAX_MS;
+    }
+
+    async function refreshBalances(options: { retries?: number } = {}): Promise<Balances | null> {
+        if (balanceRefreshing) return balanceRefreshing;
+        const retryDelays = options.retries === 0 ? [] : [250, 700];
+        const task = (async (): Promise<Balances | null> => {
+            for (let attempt = 0; attempt <= retryDelays.length; attempt += 1) {
+                try {
+                    // 一律走普通 getBag()：它会复用在途请求；传 fresh 会绕过在途去重，
+                    // 等于连甩三个 Bag 请求，反而更容易撞上网关超时。
+                    const data = readBalances(await getBag());
+                    lastBalanceError = '';
+                    balanceStale = false;
+                    lastGoodBalances = { at: Date.now(), data };
+                    return data;
+                } catch (error: any) {
+                    lastBalanceError = String(error?.message || error || '背包读取失败');
+                    if (attempt < retryDelays.length) await sleep(retryDelays[attempt]);
+                }
+            }
+            logBalanceFailure();
+            if (freshFallback()) {
+                balanceStale = true;
+                return (lastGoodBalances as { data: Balances }).data;
+            }
+            balanceStale = false;
+            return null;
+        })();
+        balanceRefreshing = task;
+        try {
+            return await task;
+        } finally {
+            if (balanceRefreshing === task) balanceRefreshing = null;
+        }
+    }
+
+    /** 快照专用：同步返回内存里的余额，绝不 await 网关。 */
+    function currentBalances(): Balances | null {
+        if (freshFallback()) {
+            const snapshot = lastGoodBalances as { at: number; data: Balances };
+            // 手里有值就先给出去；超过内存有效期顺手在后台补一次，不阻塞本次快照。
+            if (Date.now() - snapshot.at > BALANCE_CACHE_TTL_MS) void refreshBalances();
+            return snapshot.data;
+        }
+        // 还没有任何成功值：触发后台刷新，本次先按未知下发。
+        void refreshBalances();
+        return null;
+    }
+
+    /** 写操作成功后余额一定变了，立刻在后台补一次真值。 */
+    function invalidateBalanceCache(): void {
+        void refreshBalances();
     }
 
     function rulesOf(entry: any): string[] {
@@ -165,11 +286,18 @@ function createSweetPotatoService(deps: any) {
         }
     }
 
-    function toDto(data: any, bag: { seeds: number; honey: number; coins: number }, catalogAvailable: boolean | null = null): any {
+    function toDto(data: any, balances: Balances | null, catalogAvailable: boolean | null = null): any {
         const state = data.entry.state || {};
         const basePrice = int64Number(state.base_price);
         const bonusPrice = int64Number(state.bonus_price);
         const pendingCommission = int64Number(state.pending_commission);
+        const balancesKnown = balances !== null;
+        const read = (id: number): number => (balances ? balances.get(String(id)) || 0 : 0);
+        const seeds = read(SWEET_POTATO.seedId);
+        const honey = read(SWEET_POTATO.honeyId);
+        const coinsInBag = read(SWEET_POTATO.coinId);
+        // 余额未知时不能把「卖不了」当成事实：蜜薯可能就在背包里，只是这次没读到。
+        const canSell = !balancesKnown || honey > 0;
         return {
             activityId: SWEET_POTATO.activityId,
             groupId: SWEET_POTATO.groupId,
@@ -184,20 +312,26 @@ function createSweetPotatoService(deps: any) {
             basePrice,
             bonusPrice,
             price: basePrice + bonusPrice,
+            // 基础价为 0 说明服务端还没下发当日行情，此时不能按 0 价卖。
+            priceKnown: basePrice > 0,
             coins: int64Number(state.coins),
             capacity: int64Number(state.capacity),
             pendingCommission,
             commissionClaimable: !!data.active && pendingCommission > 0,
-            seeds: bag.seeds,
-            honey: bag.honey,
-            coinsInBag: bag.coins,
+            seeds,
+            honey,
+            coinsInBag,
+            // 三个数量是「读到 0」还是「没读到」，前端靠这两个字段区分 0 与 --。
+            balancesKnown,
+            balanceStale: balancesKnown && balanceStale,
+            balanceError: balancesKnown ? '' : (lastBalanceError || '背包读取失败'),
             shopAvailable: catalogAvailable,
             catalogAvailable,
             rules: rulesOf(data.entry),
             actions: {
                 claim: { enabled: !state.claims?.seed_claimed, available: !state.claims?.seed_claimed },
                 share: { enabled: !state.claims?.share_claimed, available: !state.claims?.share_claimed },
-                sell: { enabled: bag.honey > 0, available: bag.honey > 0 },
+                sell: { enabled: canSell && basePrice > 0, available: canSell && basePrice > 0 },
                 // 兑换只看活动期：目录要现查，不能因为快照没带目录就把按钮打回不可点。
                 exchange: { enabled: !!data.active, available: !!data.active, catalogAvailable },
                 commission: { enabled: pendingCommission > 0, available: pendingCommission > 0 },
@@ -267,6 +401,8 @@ function createSweetPotatoService(deps: any) {
             basePrice: int64Number(shop.base_price),
             bonusPrice: int64Number(shop.bonus_price),
             price,
+            // 服务端下发的原始剩余额度：自家铺子也带上，界面上单独显示「今日还可收」。
+            quota: int64Number(shop.remaining),
             // 自家铺子不占好友额度，remaining 对它是「不限」，不能用 0 去拦。
             remaining: unlimited ? null : int64Number(shop.remaining),
             unlimited,
@@ -278,14 +414,72 @@ function createSweetPotatoService(deps: any) {
         };
     }
 
-    async function getSweetPotatoActivity(fetchShop: boolean = true): Promise<any> {
+    /**
+     * 刷新本人铺子的今日行情（cmd 92，host_gid 传自己）。
+     *
+     * 状态槽 130.5/130.6 只给基础价与暴击，剩余接收额度必须现查；没有这个入口时
+     * 面板「今日还可收」只能等下一次任意操作触发。查询是只读的，不发写请求。
+     */
+    async function refreshSweetPotatoQuote(): Promise<any> {
+        assertCanOperate(null, false);
+        const self = selfGid();
+        if (!self) throw businessError('SWEET_POTATO_INACTIVE', '获取不到本人 GID，暂时刷新不了行情');
+        const reply = await rpc('shop', { host_gid: self }, 8000);
+        const raw = reply.get_shop?.shop;
+        const basePrice = int64Number(raw?.base_price);
+        const bonusPrice = int64Number(raw?.bonus_price);
+        const canSellKnown = Object.prototype.hasOwnProperty.call(reply.get_shop, 'can_sell');
+        const canSell = canSellKnown ? !!reply.get_shop.can_sell : null;
+        const shop = {
+            hostGid: self,
+            name: '自己的铺子',
+            avatarUrl: String(raw?.owner?.avatar || ''),
+            basePrice,
+            bonusPrice,
+            price: basePrice + bonusPrice,
+            quota: int64Number(raw?.remaining),
+            remaining: null,
+            unlimited: true,
+            canSell,
+            dailyQuota: SWEET_POTATO_SHOP_DAILY_QUOTA,
+            checkedAt: now() * 1000,
+            // 基础价为 0 说明服务端还没生成当日行情，这时候卖会按 0 价结算。
+            priceKnown: basePrice > 0,
+            available: basePrice > 0 && canSell !== false,
+            error: canSell === false ? '该铺子当前不收蜜薯' : '',
+        };
+        shopCache.set(self, shop);
+        // 行情变了，两份比价缓存（面板 3 分钟 / 自动卖薯按间隔）都必须作废。
+        panelScanCache = null;
+        scanCache = null;
+        return {
+            shop,
+            price: shop.price,
+            basePrice,
+            bonusPrice,
+            priceKnown: shop.priceKnown,
+            canSell,
+            quota: shop.quota,
+            message: shop.priceKnown
+                ? `今日收购价 ${shop.price}（基础 ${basePrice} + 暴击 ${bonusPrice}），今日还可收 ${shop.quota}`
+                : '今日收购价尚未生成，请先领取红薯种子',
+        };
+    }
+
+    /**
+     * 活动快照。余额只读内存，不再 await 背包，所以面板轮询不会被 Bag 拖住。
+     *
+     * `fetchShop` 会给快照顺带查一次兑换目录（多一条网关请求），默认关闭：
+     * 目录是独立接口，面板自己按需拉，不该压在每次轮询上。
+     * `freshBalances` 用在写操作之后——那时候余额一定变了，必须等一次真值。
+     */
+    async function getSweetPotatoActivity(fetchShop: boolean = false, options: { freshBalances?: boolean } = {}): Promise<any> {
         const data = await getGroup();
-        let bag = { seeds: 0, honey: 0, coins: 0 };
-        try {
-            bag = await inventory();
-        } catch {
-            // 背包读不到不影响活动状态展示，数量按 0 展示并在 actions 上体现为不可卖。
-        }
+        // 写操作后、以及进程里还没有任何成功值时，同步单次读一次（不重试）；
+        // 其余情况只读内存，快照不会被 Bag 拖住，也不会出现并发快照互相覆盖。
+        const balances = options.freshBalances || !freshFallback()
+            ? await refreshBalances({ retries: 0 })
+            : currentBalances();
         let shopAvailable: boolean | null = null;
         if (fetchShop && data.active) {
             try {
@@ -295,7 +489,7 @@ function createSweetPotatoService(deps: any) {
                 shopAvailable = false;
             }
         }
-        return toDto(data, bag, shopAvailable);
+        return toDto(data, balances, shopAvailable);
     }
 
     /** 兑换商店目录（面板专用；不在活动快照里顺带查，避免拖慢每轮快照）。 */
@@ -371,16 +565,11 @@ function createSweetPotatoService(deps: any) {
      *
      * 只读不代表免费：N 个铺子就是 N 次请求，所以面板上限 100、自动卖薯按配置节流。
      */
-    async function scanShops(input: any = {}): Promise<any> {
+    async function scanNow(limit: number): Promise<any> {
         assertCanOperate(null, false);
         const data = await getGroup();
         if (!data.active) throw businessError('SWEET_POTATO_INACTIVE', '以薯换福活动未开放或已结束');
         if (shopsLoading) throw businessError('SWEET_POTATO_SHOPS_BUSY', '正在查询好友价格，请稍后');
-        const config = sellConfig();
-        const rawLimit = Number(input?.limit);
-        const limit = Number.isFinite(rawLimit) && rawLimit > 0
-            ? Math.min(Math.floor(rawLimit), SCAN_MAX_LIMIT)
-            : config.friendLimit;
         shopsLoading = true;
         try {
             const self = selfGid();
@@ -442,6 +631,7 @@ function createSweetPotatoService(deps: any) {
                 failed,
                 friendCount: Math.max(0, targets.length - 1),
                 cached: false,
+                scannedAt: Date.now(),
                 message: shops.some((shop: any) => shop.available)
                     ? `已比价 ${shops.length} 个铺子，最高收购价 ${Number(best?.price ?? ownShop?.price ?? 0)}`
                     : (failureMessage || '没有可查询的铺子'),
@@ -451,13 +641,33 @@ function createSweetPotatoService(deps: any) {
         }
     }
 
+    /**
+     * 面板比价：3 分钟内复用上一次结果，`force` 跳过缓存。
+     * cmd 92 是实时行情，这层缓存只为防连点刷屏，不改变「比价要新鲜」的语义。
+     */
+    async function scanShops(input: any = {}): Promise<any> {
+        const config = sellConfig();
+        const rawLimit = Number(input?.limit);
+        const limit = Number.isFinite(rawLimit) && rawLimit > 0
+            ? Math.min(Math.floor(rawLimit), SCAN_MAX_LIMIT)
+            : config.friendLimit;
+        const force = input?.force === true || String(input?.force) === '1';
+        const at = Date.now();
+        if (!force && panelScanCache && panelScanCache.limit === limit && at - panelScanCache.at < FRIEND_SCAN_TTL_MS) {
+            return { ...panelScanCache.data, cached: true };
+        }
+        const result = await scanNow(limit);
+        panelScanCache = { at, limit, data: result };
+        return result;
+    }
+
     /** 自动卖薯用的比价：按「上限 + 配置间隔」复用上一轮排序，间隔内不再打网关。 */
     async function rankedShops(limit: number, intervalMinutes: number): Promise<any[]> {
         const at = Date.now();
         if (scanCache && scanCache.limit === limit && at - scanCache.at < intervalMinutes * 60000) {
             return scanCache.shops;
         }
-        const result = await scanShops({ limit });
+        const result = await scanNow(limit);
         scanCache = { at, limit, shops: result.shops };
         return result.shops;
     }
@@ -542,6 +752,9 @@ function createSweetPotatoService(deps: any) {
             return {
                 index,
                 itemId,
+                // 静态表按「序号 + 价格」双重匹配才算命中；价格变了说明官方调过档位，
+                // 此时宁可不显示名字，也不能把错商品的名字挂上去。
+                itemIdMatched: !!itemId,
                 name: nameKnown ? template.name : `第 ${index} 档`,
                 nameKnown,
                 price,
@@ -583,6 +796,8 @@ function createSweetPotatoService(deps: any) {
             if (result?.grant && int64String(result.grant.count) !== count) {
                 throw businessError('SWEET_POTATO_RESULT_UNKNOWN', '兑换回包数量与请求不一致，请刷新核对');
             }
+            // 兑换会扣福气币、进道具，背包必须重读。
+            invalidateBalanceCache();
             return {
                 changed: true,
                 index: Number(index),
@@ -615,6 +830,7 @@ function createSweetPotatoService(deps: any) {
                 throw businessError('SWEET_POTATO_RESULT_UNKNOWN', '领取状态未能确认，请刷新活动');
             }
             retryAfter.delete(action);
+            invalidateBalanceCache();
             return {
                 changed: true,
                 message: '每日红薯种子已领取',
@@ -627,34 +843,60 @@ function createSweetPotatoService(deps: any) {
                 return { changed: false, message: '今日分享暴击已触发' };
             }
             retryAfter.set(action, now() + RETRY_COOLDOWN_SEC);
-            const checkBody = Buffer.from(types.CheckCanShareRequest.encode(types.CheckCanShareRequest.create({})).finish());
-            const check = await sendMsgAsync('gamepb.sharepb.ShareService', 'CheckCanShare', checkBody);
-            if (!types.CheckCanShareReply.decode(check.body)?.can_share) {
-                retryAfter.delete(action);
-                throw businessError('SWEET_POTATO_SHARE_UNAVAILABLE', '当前分享入口不可用');
-            }
-            if (!state.claims?.share_claimed) {
-                const reply = await rpc('share');
-                if (!reply.activity.state.claims?.share_claimed) {
-                    throw businessError('SWEET_POTATO_RESULT_UNKNOWN', '分享前置状态未能确认，请刷新活动');
+            // cmd 98 是活动内的分享动作；暴击加成还要靠 ShareService.ReportShare 才真正落地。
+            // 顺序与官方客户端一致：先发 cmd 98，再 CheckCanShare → ReportShare。
+            // 上报失败不能把已经发生的分享打成失败，所以单独 try，把结果透给前端。
+            const reply = await rpc('share');
+            pendingShareDate = dayKey();
+            let shareReported = false;
+            let shareReportError = '';
+            try {
+                const checkBody = Buffer.from(types.CheckCanShareRequest.encode(types.CheckCanShareRequest.create({})).finish());
+                const check = await sendMsgAsync('gamepb.sharepb.ShareService', 'CheckCanShare', checkBody);
+                if (types.CheckCanShareReply.decode(check.body)?.can_share) {
+                    const reportBody = Buffer.from(types.ReportShareRequest.encode(types.ReportShareRequest.create({
+                        field_1: SHARE_REPORT_SOURCE,
+                        field_4: SHARE_REPORT_SCENE,
+                    })).finish());
+                    await sendMsgAsync('gamepb.sharepb.ShareService', 'ReportShare', reportBody);
+                    shareReported = true;
+                } else {
+                    shareReportError = '当前分享入口不可用（CheckCanShare=false）';
                 }
-                pendingShareDate = dayKey();
+            } catch (error: any) {
+                shareReportError = String(error?.message || error || '分享上报失败');
             }
-            const reportBody = Buffer.from(types.ReportShareRequest.encode(types.ReportShareRequest.create({
-                field_1: SHARE_REPORT_SOURCE,
-                field_4: SHARE_REPORT_SCENE,
-            })).finish());
-            await sendMsgAsync('gamepb.sharepb.ShareService', 'ReportShare', reportBody);
+            if (!shareReported) {
+                try {
+                    require('../../utils/utils').logWarn('以薯换福分享上报失败', { error: shareReportError });
+                } catch {
+                    // 日志失败不影响主流程
+                }
+            }
             const confirmed = await getGroup();
-            if (!confirmed.entry.state.claims?.share_claimed || int64Number(confirmed.entry.state.bonus_price) <= 0) {
-                throw businessError('SWEET_POTATO_RESULT_UNKNOWN', '分享后涨价状态未能确认，请刷新活动');
+            if (!confirmed.entry.state.claims?.share_claimed) {
+                throw businessError('SWEET_POTATO_RESULT_UNKNOWN', '分享状态未能确认，请刷新活动');
             }
             pendingShareDate = '';
             retryAfter.delete(action);
+            invalidateBalanceCache();
+            const bonusPrice = int64Number(confirmed.entry.state.bonus_price);
+            const share = reply.share;
+            const grantCount = int64Number(share?.grant?.count);
+            const shareKey = String(share?.shop?.share_key || '');
             return {
                 changed: true,
-                message: '分享暴击已确认，收购价已上涨',
-                bonusPrice: int64Number(confirmed.entry.state.bonus_price),
+                message: bonusPrice > 0
+                    ? '分享暴击已确认，收购价已上涨'
+                    : (shareReportError ? `铺子已分享，但分享上报未确认：${shareReportError}` : '铺子已分享'),
+                bonusPrice,
+                // 分享上报（ReportShare）才是暴击真正落地的那一步，成功与否都要让用户看到。
+                shareReported,
+                shareReportError,
+                shareKey,
+                seedReward: grantCount > 0
+                    ? { itemId: int64String(share.grant.item_id), count: grantCount }
+                    : null,
             };
         }
 
@@ -709,6 +951,10 @@ function createSweetPotatoService(deps: any) {
             throw businessError('SWEET_POTATO_RESULT_UNKNOWN', '出售回包与数量或价格不一致，请刷新核对');
         }
         retryAfter.delete(action);
+        // 卖出会改变目标铺子的剩余额度与自己背包的蜜薯数，两份比价缓存都要作废。
+        panelScanCache = null;
+        scanCache = null;
+        invalidateBalanceCache();
         // 回包的 field 4 是该铺每日「上限」（实机 8000），不是剩余量；剩余量只能自己按成交数递减。
         const updatedShop = {
             ...shop,
@@ -749,6 +995,7 @@ function createSweetPotatoService(deps: any) {
                 throw businessError('SWEET_POTATO_RESULT_UNKNOWN', '提成领取回包金额为 0，请刷新核对');
             }
             retryAfter.delete('commission');
+            invalidateBalanceCache();
             return {
                 changed: true,
                 amount,
@@ -791,7 +1038,8 @@ function createSweetPotatoService(deps: any) {
         const pending = serializeMutation(async () => {
             const result = await mutate(action as any, input);
             try {
-                return { ...result, activity: await getSweetPotatoActivity() };
+                // 写操作刚改了背包/福气币，这份回填的快照必须拿真值，不能读内存里的旧值。
+                return { ...result, activity: await getSweetPotatoActivity(false, { freshBalances: true }) };
             } catch {
                 return { ...result, activity: null, refreshRequired: true };
             }
@@ -964,8 +1212,17 @@ function createSweetPotatoService(deps: any) {
             Number(land.id) === id && (!land.plant || !Number(land.plant.id))
         )));
         const planted = await plantEmptyLands(empty);
+        // 收获与补种都动背包，下一份快照要按真值报。
+        invalidateBalanceCache();
         return harvestedCount + planted.length;
     }
+
+    // 进程起来后先预热一次背包。首个快照最容易被网关并发挤掉，而这时还没有
+    // 「上次成功值」可回退，界面就会一路显示 0 到下一次成功为止。提前拉一次把兜底填上。
+    const warmupTimer: any = setTimeout(() => {
+        void refreshBalances();
+    }, 1200);
+    if (typeof warmupTimer?.unref === 'function') warmupTimer.unref();
 
     return {
         getSweetPotatoActivity,
@@ -973,6 +1230,7 @@ function createSweetPotatoService(deps: any) {
         getSweetPotatoShops,
         getSweetPotatoRecords,
         scanShops,
+        refreshSweetPotatoQuote,
         operateSweetPotato,
         exchangeSweetPotatoGoods,
         claimCommission,

@@ -164,6 +164,8 @@ const INPUT_SURFACE = [
     ['activity-center/sweet-potato-routes.ts', 'action', 'params', 'text', 'service', ['src/services/activity-center/sweet-potato.ts', 'INVALID_SWEET_POTATO_ACTION']],
     ['activity-center/sweet-potato-routes.ts', 'offset', 'query', 'int', 'service', ['src/services/activity-center/sweet-potato.ts', 'INVALID_SWEET_POTATO_PAGE']],
     ['activity-center/sweet-potato-routes.ts', 'limit', 'query', 'int', 'service', ['src/services/activity-center/sweet-potato.ts', 'SCAN_MAX_LIMIT']],
+    // force 只认 true / '1'，其余一律当 false，服务层用 FRIEND_SCAN_TTL_MS 决定要不要走缓存。
+    ['activity-center/sweet-potato-routes.ts', 'force', 'query', 'text', 'service', ['src/services/activity-center/sweet-potato.ts', 'FRIEND_SCAN_TTL_MS']],
     ['activity-center/qingmei-routes.ts', 'count', 'body', 'int', 'service', ['src/services/activity-center/qingmei.ts', 'positiveDecimal(input, \'INVALID_QINGMEI_COUNT\'']],
     ['activity-center/qingmei-routes.ts', 'ingredients', 'body', 'int-list', 'service', ['src/services/activity-center/qingmei.ts', 'positiveDecimal(entry?.uid']],
     ['activity-center/qixi-routes.ts', 'friendGid', 'body', 'int', 'service', ['src/services/activity-center/qixi.ts', 'positiveDecimal(friendGidInput']],

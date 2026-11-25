@@ -15,6 +15,7 @@
 
 | 版本 | 更新序号 | 日期 | 更新内容 | 提交 |
 | --- | --- | --- | --- | --- |
+| v3.39.0 | #267 | 2026-11-26 | 移植 li 版以薯换福运行时方案，同步协议与游戏客户端版本 | `0d2daeaa` |
 | v3.38.0 | #266 | 2026-11-25 | 新增以薯换福收购记录与自动比价卖薯，补齐上一轮遗留项 | — |
 | v3.37.1 | #265 | 2026-11-25 | 修复以薯换福兑换协议与自家铺子额度，补上提成领取 | — |
 | v3.37.0 | #263 | 2026-11-25 | 新增以薯换福完整闭环：种植、出售、分享与兑换商店 | — |
@@ -254,6 +255,20 @@ flowchart TB
 ```
 
 ## 详细记录
+
+### 2026-11-25 · v3.39.0（#267） · 移植 li 版以薯换福运行时方案，同步协议与游戏客户端版本
+
+按 `muyuewang/qq-farm-bot-li` 把以薯换福剩下没搬的运行方案补齐。前端界面、后端服务、六个开关与四个参数本地早就有了，这次搬的是「跑起来更稳」的四件事，外加协议与客户端版本对齐。
+
+- **余额快照改成非阻塞**：活动快照以前在 `getSweetPotatoActivity()` 里 `await` 背包，而网关的 `Bag` 排在活动请求之后，并发一满就被挤掉；页面挂载与轮询还会并发打两个快照，后一个失败就覆盖前一个的成功结果，表现是「刚刷新有数字、几秒后整排变 0」。现在拆成两条通道——`refreshBalances()` 单飞打网关（同一时刻只一个在途，最坏重试 250/700ms），`currentBalances()` 同步读内存供快照使用。两级兜底：10 秒内直接复用；读失败但手里有 10 分钟内的成功值就继续用并标 `balanceStale`；连一次成功值都没有才下发 `balancesKnown=false`。进程启动 1.2 秒后预热一次；写操作成功后 `invalidateBalanceCache()` 后台重读，回填快照用 `freshBalances: true` 等真值。余额未知时不再把「卖不了」当事实（`actions.sell.enabled` 保持 true）。
+- **分享改成先分享后上报**：之前把 `CheckCanShare` 当门闸放在最前面，入口临时不可用就白丢当天分享。现在顺序与官方客户端一致：`Operate(cmd=98)` → `CheckCanShare` → `ReportShare{28,2017}`，后两步整段尽力而为，抛出或 `can_share=false` 只记 `shareReportError`，接口把 `shareReported` / `shareReportError` 一起透出，面板用警示样式提示「铺子已分享，但暴击上报未确认」。只有 `claims.share_claimed` 确认不了才按结果不明处理。
+- **新增刷新行情接口**：`POST /api/activity-center/sweet-potato/quote/refresh` 走 cmd 92 只查自己，拿剩余接收额度（状态槽里没有这一项）。面板工具条加「刷新我的行情」，结果写进「剩余收购量」的提示位并同步比价表里自己那一行；自家铺子行改显示服务端下发的「还可收 N（自家不限出售）」。
+- **面板比价 3 分钟缓存**：`GET /scan` 支持 `force`，3 分钟内复用上一次结果并标记 `cached`，前端文案说明「点重新比价强制重扫」；「重新比价」按钮自动带 `force=1`。自动卖薯那份按配置间隔的缓存独立保留，两者互不顶掉节奏，成交或刷新行情时同时作废。`force` 已登记 `INPUT_SURFACE`。
+- **协议对齐**：`SweetPotatoState` 补 4 号子槽 `actions`（实机只保留最近一次动作，不能用来判断今天是否已领）；`SweetPotatoShareReply` 字段号按 li 版改正为 `grant=1 / price=2 / field_3 / shop=4{share_key=2} / field_5 / field_6`（旧版把 2/3 写成 `bonus_price`/`price`、4 号当 bytes 分享凭证，因为从没读过所以一直没暴露）。兑换目录归一化补 `itemIdMatched`。
+- **参数显式夹取**：`sweet_potato_scan_friend_limit` / `sweet_potato_scan_interval_minutes` / `sweet_potato_sell_min_count` 在 `cloneAccountConfig` 里夹到 1–100 / 5–720 / 1–9999。默认值是数字，前端可能传字符串甚至布尔，不夹取的话「每轮扫几家」会退化成 1、比价间隔变成 0（等于每轮全量扫好友）。
+- **游戏客户端版本同步**：QQ 与微信两端统一到 `1.17.1.10_20261117`（`updatedAt` `1795596035361`）。旧基线是 QQ `1.17.0.3` / 微信 `1.17.0.6`，两轮旧抓包的结论；li 版 2026-11-25 抓包确认两端都是 1.17.1.10。已保存的旧版本号不用手动改，`resolveClientVersion` 只认 `updatedAt` 更大的值。
+- **验证**：`core/tests/sweet-potato.test.js` 22 → 32 条（分享三条失败分支、快照不 await 背包与 stale 回退、余额未知不禁用出售、比价缓存与 force、刷新行情、`itemIdMatched`、参数夹取、状态槽 4 与分享回包字段号），`web/tests/sweet-potato-activity.test.mjs` 7 → 8 条。core 1097 条、web 374 条全绿，`vue-tsc`、`eslint --max-warnings=0`（前后端）、`pnpm build` 通过。
+- **风险提示**：客户端版本号是对齐 li 版抓包的结论，本地没有实机复验；若 QQ 端连上即被回「Code 或版本不符」（关闭码 400），把 `core/src/config/config.ts` 的 `DEFAULT_CLIENT_VERSION` 改回 `1.17.0.3_20261117`、`updatedAt` 改回 `1794795016627` 即可回退，微信那对常量不受影响。细节见 `docs/sweet-potato.md`。
 
 ### 2026-11-25 · v3.38.0（#266） · 新增以薯换福收购记录与自动比价卖薯，补齐上一轮遗留项
 

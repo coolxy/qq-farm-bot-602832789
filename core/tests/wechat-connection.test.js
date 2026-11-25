@@ -17,8 +17,9 @@ test('QQ and WeChat versions can be configured independently', () => {
     try {
         CONFIG.clientVersion = '';
         CONFIG.wxClientVersion = '';
-        assert.equal(DEFAULT_WX_CLIENT_VERSION, '1.17.0.6_20261117');
-        // 两个平台的默认版本不同步：微信 1.17.0.6（小程序抓包），QQ 仍是 1.17.0.3 基线。
+        // 2026-11-25 起两端默认版本一致（1.17.1.10），这里仍逐平台断言「取的是自己那一个常量」。
+        assert.equal(DEFAULT_WX_CLIENT_VERSION, '1.17.1.10_20261117');
+        assert.equal(DEFAULT_CLIENT_VERSION, '1.17.1.10_20261117');
         for (const platform of ['qq', 'wx', 'wechat']) {
             CONFIG.platform = platform;
             const expected = platform === 'qq' ? DEFAULT_CLIENT_VERSION : DEFAULT_WX_CLIENT_VERSION;

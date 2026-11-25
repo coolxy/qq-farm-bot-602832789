@@ -251,6 +251,7 @@ function createDataProvider(options: DataProviderOptions) {
         getSweetPotatoShops: (accountRef: string, input: unknown) => callWorkerApi(resolveAccountRefId(accountRef), 'getSweetPotatoShops', input),
         getSweetPotatoRecords: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getSweetPotatoRecords'),
         scanSweetPotatoShops: (accountRef: string, input: unknown) => callWorkerApi(resolveAccountRefId(accountRef), 'scanSweetPotatoShops', input),
+        refreshSweetPotatoQuote: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'refreshSweetPotatoQuote'),
         operateSweetPotato: (accountRef: string, action: string, input: unknown) => (
             callWorkerApi(resolveAccountRefId(accountRef), 'operateSweetPotato', action, input)
         ),

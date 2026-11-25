@@ -61,7 +61,12 @@ function buildGroupReply(types, statePatch = {}) {
     });
 }
 
-function buildDeps({ types, statePatch = {}, bag = { 20307: 3, 1032: 20, 1033: 0 }, calls = [], shop = {}, catalog = null, records = [] }) {
+function buildDeps({
+    types, statePatch = {}, bag = { 20307: 3, 1032: 20, 1033: 0 }, calls = [], shop = {}, catalog = null, records = [],
+    // 分享回包可配置：默认「已分享、暴击没涨」，用来覆盖上报与确认两条分支。
+    shareGrant = { item_id: 20307, count: 4 }, sharePrice = 10, shareBonusAfter = 0, shareClaimedAfter = true,
+    shareReport = 'ok',
+}) {
     let groupReply = buildGroupReply(types, statePatch);
     const shopRemaining = shop.remaining ?? 50;
     const shopCanSell = shop.canSell;
@@ -101,7 +106,8 @@ function buildDeps({ types, statePatch = {}, bag = { 20307: 3, 1032: 20, 1033: 0
                 return { body: Buffer.alloc(0) };
             }
             if (service === 'gamepb.sharepb.ShareService' && method === 'CheckCanShare') {
-                return { body: encode(types.CheckCanShareReply, { can_share: true }) };
+                if (shareReport === 'throw') throw new Error('check failed');
+                return { body: encode(types.CheckCanShareReply, { can_share: shareReport !== 'unavailable' }) };
             }
             if (service === 'gamepb.sharepb.ShareService' && method === 'ReportShare') {
                 return { body: Buffer.alloc(0) };
@@ -199,12 +205,24 @@ function buildDeps({ types, statePatch = {}, bag = { 20307: 3, 1032: 20, 1033: 0
                     };
                 }
                 if (Number(request.cmd) === 98) {
+                    groupReply = buildGroupReply(types, {
+                        ...statePatch,
+                        claims: { seed_claimed: false, share_claimed: shareClaimedAfter },
+                        bonus_price: shareBonusAfter,
+                    });
                     return {
                         body: encode(types.SweetPotatoOperateReply, {
                             id: SWEET_POTATO.activityId,
                             cmd: 98,
-                            share: { bonus_price: 0, price: 10 },
-                            activity: { head: { id: SWEET_POTATO.activityId }, state: { claims: { share_claimed: true }, base_price: 10, bonus_price: 0 } },
+                            share: {
+                                grant: shareGrant,
+                                price: sharePrice,
+                                shop: { gid: 10001, share_key: 'yshf-share-key' },
+                            },
+                            activity: {
+                                head: { id: SWEET_POTATO.activityId },
+                                state: { claims: { share_claimed: shareClaimedAfter }, base_price: 10, bonus_price: shareBonusAfter },
+                            },
                         }),
                     };
                 }
@@ -315,15 +333,51 @@ test('sweet potato: 收购余量不足时中止出售', async () => {
     );
 });
 
-test('sweet potato: 分享后暴击没涨价按结果不明处理', async () => {
+test('sweet potato: 分享先发 cmd 98 再上报，暴击没涨也算分享成功', async () => {
     const types = await loadTypes();
     const calls = [];
     const service = createSweetPotatoService(buildDeps({ types, calls }));
+    const result = await service.operateSweetPotato('share', {});
+    // li 版语义：cmd 98 是分享本身，ReportShare 才让暴击落地；暴击没涨不能把分享打成失败。
+    assert.equal(result.changed, true);
+    assert.equal(result.bonusPrice, 0);
+    assert.equal(result.shareReported, true);
+    assert.equal(result.shareReportError, '');
+    assert.equal(result.shareKey, 'yshf-share-key');
+    assert.deepEqual(result.seedReward, { itemId: '20307', count: 4 });
+    const order = calls.filter(call => call.method === 'Operate' || call.method === 'ReportShare')
+        .map(call => (call.method === 'Operate'
+            ? `cmd${Number(types.SweetPotatoOperateRequest.decode(call.body).cmd)}`
+            : call.method));
+    assert.deepEqual(order.slice(-2), ['cmd98', 'ReportShare']);
+});
+
+test('sweet potato: 分享上报失败不阻断分享，原因透给前端', async () => {
+    const types = await loadTypes();
+    const service = createSweetPotatoService(buildDeps({ types, shareReport: 'unavailable' }));
+    const result = await service.operateSweetPotato('share', {});
+    assert.equal(result.changed, true);
+    assert.equal(result.shareReported, false);
+    assert.match(result.shareReportError, /CheckCanShare=false/);
+});
+
+test('sweet potato: 分享上报抛异常也只记错误，分享状态仍然成立', async () => {
+    const types = await loadTypes();
+    const service = createSweetPotatoService(buildDeps({ types, shareReport: 'throw' }));
+    const result = await service.operateSweetPotato('share', {});
+    assert.equal(result.changed, true);
+    assert.equal(result.shareReported, false);
+    assert.match(result.shareReportError, /check failed/);
+});
+
+test('sweet potato: 分享后服务端没记上才按结果不明处理', async () => {
+    const types = await loadTypes();
+    const calls = [];
+    const service = createSweetPotatoService(buildDeps({ types, calls, shareClaimedAfter: false }));
     await assert.rejects(
         () => service.operateSweetPotato('share', {}),
         error => error.code === 'SWEET_POTATO_RESULT_UNKNOWN',
     );
-    // 分享前置与上报都发过，但回包 bonus_price=0，不能报成功。
     assert.ok(calls.some(call => call.method === 'ReportShare'));
 });
 
@@ -674,4 +728,152 @@ test('sweet potato 收购记录: cmd 95 解析按时间倒序并汇总提成，�
     const recordCalls = calls.filter(call => call.method === 'Operate'
         && Number(types.SweetPotatoOperateRequest.decode(call.body).cmd) === 95);
     assert.equal(recordCalls.length, 1);
+});
+
+test('sweet potato proto: 状态槽 4 号子槽 actions 与分享回包 2/3/4 号字段', async () => {
+    const types = await loadTypes();
+    const shareReplyType = types.raw.lookupType('gamepb.activitypb.SweetPotatoShareReply');
+    const payload = {
+        grant: { item_id: 20307, count: 4 },
+        price: 144,
+        field_3: 1,
+        shop: { gid: 10001, share_key: 'k' },
+        field_5: 1,
+        field_6: 2,
+    };
+    const decoded = shareReplyType.decode(encode(shareReplyType, payload));
+    // 旧版本把 2/3 写成 bonus_price/price、4 号当 bytes 分享凭证，这里钉住正确字段号。
+    assert.equal(String(decoded.price), '144');
+    assert.equal(String(decoded.grant.count), '4');
+    assert.equal(String(decoded.shop.share_key), 'k');
+    assert.equal(String(decoded.field_5), '1');
+
+    const state = types.SweetPotatoState.decode(encode(types.SweetPotatoState, {
+        coins: 1,
+        actions: { field_1: 3, field_2: 1, field_3: 2 },
+    }));
+    assert.equal(Number(state.actions.field_1), 3);
+    assert.equal(Number(state.actions.field_3), 2);
+});
+
+test('sweet potato: 快照不 await 背包，读失败时回退上一次成功值并标 stale', async () => {
+    const types = await loadTypes();
+    let failBag = false;
+    const deps = buildDeps({ types });
+    const original = deps.getBag;
+    deps.getBag = async () => {
+        if (failBag) throw new Error('bag timeout');
+        return original();
+    };
+    const service = createSweetPotatoService(deps);
+    const first = await service.getSweetPotatoActivity();
+    assert.equal(first.balancesKnown, true);
+    assert.equal(first.honey, 20);
+
+    // 缓存命中时连背包都不读：再调一次不增加任何 Bag 请求。
+    const second = await service.getSweetPotatoActivity();
+    assert.equal(second.honey, 20);
+    assert.equal(second.balanceStale, false);
+
+    // 强制刷新失败，但手上有 10 分钟内的成功值：继续用旧值，只标记 stale。
+    failBag = true;
+    const third = await service.getSweetPotatoActivity(false, { freshBalances: true });
+    assert.equal(third.balancesKnown, true);
+    assert.equal(third.honey, 20);
+    assert.equal(third.balanceStale, true);
+});
+
+test('sweet potato: 从来没有读到过背包时按「余额未知」下发，不把卖不了当事实', async () => {
+    const types = await loadTypes();
+    const deps = buildDeps({ types });
+    deps.getBag = async () => { throw new Error('bag down'); };
+    const service = createSweetPotatoService(deps);
+    const snapshot = await service.getSweetPotatoActivity();
+    assert.equal(snapshot.balancesKnown, false);
+    assert.equal(snapshot.honey, 0);
+    assert.match(snapshot.balanceError, /bag down/);
+    // 余额未知不等于「没有蜜薯」，出售按钮必须保持可点，由服务端做最终判断。
+    assert.equal(snapshot.actions.sell.enabled, true);
+});
+
+test('sweet potato 比价: 3 分钟内复用结果，force 强制重扫', async () => {
+    const types = await loadTypes();
+    const calls = [];
+    const service = createSweetPotatoService(buildDeps({ types, calls, shop: { remaining: 50 } }));
+    const countScan = () => calls.filter(call => call.method === 'Operate'
+        && Number(types.SweetPotatoOperateRequest.decode(call.body).cmd) === 92).length;
+
+    const first = await service.scanShops({ limit: 5 });
+    assert.equal(first.cached, false);
+    const afterFirst = countScan();
+    assert.equal(afterFirst, 2);
+
+    const second = await service.scanShops({ limit: 5 });
+    assert.equal(second.cached, true);
+    assert.equal(countScan(), afterFirst);
+
+    const forced = await service.scanShops({ limit: 5, force: '1' });
+    assert.equal(forced.cached, false);
+    assert.equal(countScan(), afterFirst * 2);
+});
+
+test('sweet potato 刷新行情: cmd 92 查自己，回带剩余接收额度', async () => {
+    const types = await loadTypes();
+    const calls = [];
+    const service = createSweetPotatoService(buildDeps({ types, calls, shop: { remaining: 40, canSell: true } }));
+    const result = await service.refreshSweetPotatoQuote();
+    const request = types.SweetPotatoOperateRequest.decode(
+        calls.find(call => call.method === 'Operate').body,
+    );
+    assert.equal(Number(request.cmd), 92);
+    assert.equal(String(request.get_shop.host_gid), '10001');
+    assert.equal(result.price, 12);
+    assert.equal(result.basePrice, 10);
+    assert.equal(result.bonusPrice, 2);
+    assert.equal(result.quota, 40);
+    assert.equal(result.canSell, true);
+    assert.match(result.message, /今日还可收 40/);
+});
+
+test('sweet potato: 兑换目录只有序号与价格都对上才标 itemIdMatched', async () => {
+    const types = await loadTypes();
+    const service = createSweetPotatoService(buildDeps({
+        types,
+        catalog: [
+            { index: 10, price: 7000, status: 2, limit: 3 },
+            { index: 9, price: 99999, status: 2, limit: 1 },
+        ],
+    }));
+    const result = await service.getSweetPotatoShopCatalog();
+    const matched = result.goods.find(goods => goods.index === 10);
+    const mismatched = result.goods.find(goods => goods.index === 9);
+    assert.equal(matched.itemIdMatched, true);
+    assert.equal(matched.nameKnown, true);
+    assert.equal(mismatched.itemIdMatched, false);
+    assert.equal(mismatched.itemId, '');
+    assert.equal(mismatched.nameKnown, false);
+});
+
+test('sweet potato: 四个可调参数在账号配置里被显式夹取', () => {
+    const sharedState = require('../dist/models/store/shared-state');
+    const clamped = sharedState.cloneAccountConfig({
+        automation: {
+            sweet_potato_scan_friend_limit: '0',
+            sweet_potato_scan_interval_minutes: '9999',
+            sweet_potato_sell_min_count: true,
+        },
+    }).automation;
+    // 默认值是数字，前端可能写字符串/布尔；不夹取的话「每轮扫几家」会退化成 1，
+    // 或者比价间隔变成 0（等于每轮全量扫好友）。
+    assert.equal(clamped.sweet_potato_scan_friend_limit, 1);
+    assert.equal(clamped.sweet_potato_scan_interval_minutes, 720);
+    assert.equal(clamped.sweet_potato_sell_min_count, 1);
+    // 布尔项不受数值夹取影响。
+    assert.equal(clamped.sweet_potato_sell_fallback_own, SWEET_POTATO_DEFAULTS.sweet_potato_sell_fallback_own);
+
+    const normal = sharedState.cloneAccountConfig({
+        automation: { sweet_potato_scan_friend_limit: '30', sweet_potato_scan_interval_minutes: '45' },
+    }).automation;
+    assert.equal(normal.sweet_potato_scan_friend_limit, 30);
+    assert.equal(normal.sweet_potato_scan_interval_minutes, 45);
 });

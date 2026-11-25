@@ -7,6 +7,8 @@ interface SweetPotatoShop {
   name: string
   avatarUrl: string
   price: number | null
+  /** 服务端下发的原始剩余接收额度；自家铺子也带，只是出售时不拿它拦。 */
+  quota?: number | null
   remaining: number | null
   unlimited?: boolean
   canSell?: boolean | null
@@ -22,6 +24,8 @@ interface SweetPotatoGoods {
   itemId: string
   name: string
   nameKnown: boolean
+  /** 序号与价格同时对上静态表才算命中；未命中时 itemId 为空串。 */
+  itemIdMatched?: boolean
   price: string
   status: number
   limit: number
@@ -56,6 +60,11 @@ interface SweetPotatoActivity {
   seeds: number
   honey: number
   coinsInBag: number
+  /** 三个数量是「读到 0」还是「没读到」，false 时界面显示 -- 而不是 0。 */
+  balancesKnown?: boolean
+  /** 数字是上一次成功值（本次没读到背包），仍可用但不是新鲜值。 */
+  balanceStale?: boolean
+  balanceError?: string
   startTime: number
   endTime: number
   rules: string[]
@@ -69,6 +78,8 @@ const loading = ref(false)
 const busy = ref(false)
 const error = ref('')
 const notice = ref('')
+/** 提示是「做成了但有隐患」（比如分享上报没确认），样式要和成功区分开。 */
+const noticeWarning = ref(false)
 
 const shops = ref<SweetPotatoShop[]>([])
 const shopsLoading = ref(false)
@@ -96,7 +107,11 @@ const sellTarget = ref<SweetPotatoShop | null>(null)
 const sellCount = ref(1)
 
 const honey = computed(() => Number(activity.value?.honey || 0))
-const canSell = computed(() => !!activity.value?.active && honey.value > 0)
+/** 背包有没有读到：false 时三处数量显示 --，不能让「没读到」看起来像「是 0」。 */
+const balancesKnown = computed(() => activity.value?.balancesKnown !== false)
+const canSell = computed(() => !!activity.value?.active && (!balancesKnown.value || honey.value > 0))
+/** 本人铺子的今日剩余接收额度（cmd 92 现查，快照里没有这一项）。 */
+const quoteQuota = ref<number | null>(null)
 const pendingCommission = computed(() => Number(activity.value?.pendingCommission || 0))
 const maxSellForTarget = computed(() => {
   if (!sellTarget.value)
@@ -152,9 +167,13 @@ async function act(action: string, payload: Record<string, unknown> = {}) {
   busy.value = true
   error.value = ''
   notice.value = ''
+  noticeWarning.value = false
   try {
     const response = await api.post(`/api/activity-center/sweet-potato/${action}`, payload, accountHeaders())
     const data = response.data?.data || {}
+    // 分享上报（ReportShare）才是暴击真正落地的那一步：上报没确认时分享本身算成功，
+    // 但要用警示样式提示，别让用户以为价格已经涨了。
+    noticeWarning.value = action === 'share' && data.shareReported === false
     notice.value = String(data.message || '操作完成')
     if (data.activity)
       activity.value = data.activity
@@ -206,14 +225,17 @@ async function loadShops(reset = false) {
   }
 }
 
-/** 一键比价：一次扫完全部好友铺子（含自家），按成交价从高到低给出排序。 */
-async function scanShops() {
+/**
+ * 一键比价：一次扫完全部好友铺子（含自家），按成交价从高到低给出排序。
+ * 服务端有 3 分钟缓存防连点，force 跳过；点「重新比价」才强制重扫。
+ */
+async function scanShops(force = false) {
   if (!props.accountId || shopsLoading.value)
     return
   shopsLoading.value = true
   error.value = ''
   try {
-    const response = await api.get('/api/activity-center/sweet-potato/scan', accountHeaders())
+    const response = await api.get(`/api/activity-center/sweet-potato/scan?force=${force ? 1 : 0}`, accountHeaders())
     const data = response.data?.data || {}
     shops.value = Array.isArray(data.shops) ? data.shops : []
     shopsTotal.value = shops.value.length
@@ -221,13 +243,45 @@ async function scanShops() {
     shopsOffset.value = shops.value.length
     shopsOpen.value = true
     shopsMode.value = 'scan'
-    scanMessage.value = String(data.message || '')
+    scanMessage.value = data.cached
+      ? `${String(data.message || '')}（3 分钟内的缓存结果，点「重新比价」强制重扫）`
+      : String(data.message || '')
   }
   catch (err: any) {
     error.value = messageOf(err)
   }
   finally {
     shopsLoading.value = false
+  }
+}
+
+/**
+ * 刷新本人铺子的今日行情（cmd 92，只查自己一家，只读不写）。
+ * 快照里只有基础价与暴击，剩余接收额度必须现查，所以单独给一个入口。
+ */
+const quoteRefreshing = ref(false)
+async function refreshQuote() {
+  if (!props.accountId || quoteRefreshing.value)
+    return
+  quoteRefreshing.value = true
+  error.value = ''
+  notice.value = ''
+  noticeWarning.value = false
+  try {
+    const response = await api.post('/api/activity-center/sweet-potato/quote/refresh', {}, accountHeaders())
+    const data = response.data?.data || {}
+    quoteQuota.value = data.quota === null || data.quota === undefined ? null : Number(data.quota)
+    notice.value = String(data.message || '行情已刷新')
+    // 比价表里自己那一行也跟着更新，免得两个地方对不上。
+    const own = shops.value.find(shop => shop.unlimited)
+    if (own && data.shop)
+      Object.assign(own, data.shop)
+  }
+  catch (err: any) {
+    error.value = messageOf(err)
+  }
+  finally {
+    quoteRefreshing.value = false
   }
 }
 
@@ -325,6 +379,8 @@ watch(() => props.accountId, () => {
   catalog.value = []
   catalogCounts.value = {}
   sellTarget.value = null
+  quoteQuota.value = null
+  noticeWarning.value = false
   load()
 }, { immediate: false })
 
@@ -343,7 +399,7 @@ onMounted(load)
     </div>
 
     <template v-else>
-      <div v-if="error || notice" class="sp-message" :class="{ success: notice && !error }" role="status">
+      <div v-if="error || notice" class="sp-message" :class="{ success: notice && !error && !noticeWarning, warn: noticeWarning && !error }" role="status">
         <span>{{ error || notice }}</span>
         <button v-if="error" type="button" :disabled="loading" @click="load">
           重试
@@ -365,17 +421,19 @@ onMounted(load)
           <div class="sp-metric">
             <span class="sp-metric-label">福气币</span>
             <strong class="sp-metric-value">{{ activity.coins }}</strong>
-            <span class="sp-metric-hint">背包 {{ activity.coinsInBag }}</span>
+            <span class="sp-metric-hint">背包 {{ balancesKnown ? activity.coinsInBag : '--' }}</span>
           </div>
           <div class="sp-metric">
             <span class="sp-metric-label">蜜薯库存</span>
-            <strong class="sp-metric-value">{{ activity.honey }}</strong>
-            <span class="sp-metric-hint">红薯种子 {{ activity.seeds }}</span>
+            <strong class="sp-metric-value">{{ balancesKnown ? activity.honey : '--' }}</strong>
+            <span class="sp-metric-hint">红薯种子 {{ balancesKnown ? activity.seeds : '--' }}</span>
           </div>
           <div class="sp-metric">
             <span class="sp-metric-label">剩余收购量</span>
             <strong class="sp-metric-value">{{ activity.capacity }}</strong>
-            <span class="sp-metric-hint">截至 {{ formatTime(activity.endTime) }}</span>
+            <span class="sp-metric-hint">
+              {{ quoteQuota === null ? `截至 ${formatTime(activity.endTime)}` : `今日还可收 ${quoteQuota}` }}
+            </span>
           </div>
           <div class="sp-metric" :class="{ highlight: pendingCommission > 0 }">
             <span class="sp-metric-label">待领提成</span>
@@ -407,7 +465,10 @@ onMounted(load)
               <span v-else-if="shopsTotal">已查询 {{ shops.length }} / {{ shopsTotal }}</span>
             </div>
             <div class="sp-panel-tools">
-              <button type="button" class="sp-link" :disabled="shopsLoading" @click="scanShops">
+              <button type="button" class="sp-link" :disabled="quoteRefreshing" @click="refreshQuote">
+                {{ quoteRefreshing ? '刷新中…' : '刷新我的行情' }}
+              </button>
+              <button type="button" class="sp-link" :disabled="shopsLoading" @click="scanShops(shopsMode === 'scan')">
                 {{ shopsMode === 'scan' ? '重新比价' : '一键比价' }}
               </button>
               <button type="button" class="sp-link" :disabled="shopsLoading" @click="loadShops(true)">
@@ -437,7 +498,14 @@ onMounted(load)
                 <span v-else class="sp-shop-error">{{ shop.error || '暂不可用' }}</span>
               </div>
               <div class="sp-shop-side">
-                <span v-if="shop.available">{{ shop.unlimited ? '还可收 不限' : `余量 ${shop.remaining}` }}</span>
+                <span v-if="shop.available">
+                  <template v-if="shop.unlimited">
+                    还可收 {{ shop.quota ?? '--' }}（自家不限出售）
+                  </template>
+                  <template v-else>
+                    余量 {{ shop.remaining }}
+                  </template>
+                </span>
                 <button type="button" class="sp-link" :disabled="busy || !shop.available || !honey" @click="openSell(shop)">
                   出售
                 </button>
@@ -603,6 +671,11 @@ onMounted(load)
 .sp-message.success {
   color: #2f6b4f;
   background: rgba(84, 168, 122, 0.14);
+}
+
+.sp-message.warn {
+  color: #8a5a1e;
+  background: rgba(198, 122, 43, 0.16);
 }
 
 .sp-message button {

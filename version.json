@@ -1,12 +1,20 @@
 {
   "major": 3,
-  "minor": 38,
+  "minor": 39,
   "patch": 0,
-  "build": 266,
-  "version": "3.38.0",
-  "updatedAt": "2026-11-25T11:18:42.269Z",
-  "lastCommit": "—",
+  "build": 267,
+  "version": "3.39.0",
+  "updatedAt": "2026-11-25T16:08:07.387Z",
+  "lastCommit": "0d2daeaa",
   "history": [
+    {
+      "version": "3.39.0",
+      "build": 267,
+      "date": "2026-11-26",
+      "summary": "移植 li 版以薯换福运行时方案，同步协议与游戏客户端版本",
+      "commit": "0d2daeaa",
+      "type": "minor"
+    },
     {
       "version": "3.38.0",
       "build": 266,

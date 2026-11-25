@@ -28,10 +28,19 @@ message SweetPotatoShareState {
     int64 field_4 = 4;
 }
 
+// 状态槽 130 的 4 号子槽：动作标记。实机只保留最近一次动作（卖出 / 分享 /
+// 领种子互相覆盖），**不能**用来判断「今天是否已领种子」，仅供排查对账。
+message SweetPotatoActionSlot {
+    int64 field_1 = 1;
+    int64 field_2 = 2;
+    int64 field_3 = 3;
+}
+
 message SweetPotatoState {
     SweetPotatoClaims claims = 1;
     SweetPotatoShareState share = 2;
     int64 coins = 3;
+    SweetPotatoActionSlot actions = 4;
     int64 base_price = 5;
     int64 bonus_price = 6;
     int64 capacity = 7;
@@ -189,13 +198,30 @@ message SweetPotatoSellReply {
     int64 coins = 5;
 }
 
+// 下发的单件道具。字段号与 corepb.Item 的 id/count 完全一致（1/2），
+// 所以 cmd 91 的回包用 repeated corepb.Item 解出来和 li 版的 YshfGrantReply 同值。
+message SweetPotatoGrant {
+    int64 item_id = 1;
+    int64 count = 2;
+}
+
+// 分享回包里的本人铺子信息（cmd 98），field 2 为分享 key。
+message SweetPotatoSelfShop {
+    int64 gid = 1;
+    string share_key = 2;
+    string avatar = 3;
+    int64 level = 4;
+    bytes field_5 = 5;
+}
+
+// cmd 98 分享回包。字段号按 li 版实机抓包对齐（旧版本把 2/3 写成了
+// bonus_price/price，且 4 号当 bytes 分享凭证，三处都错，从没读过所以没暴露）。
 message SweetPotatoShareReply {
-    repeated corepb.Item rewards = 1;
-    int64 bonus_price = 2;
-    int64 price = 3;
-    // 分享凭证：不返回给前端，也不写日志。
-    bytes share_payload = 4;
-    int64 capacity = 5;
+    SweetPotatoGrant grant = 1;
+    int64 price = 2;
+    int64 field_3 = 3;
+    SweetPotatoSelfShop shop = 4;
+    int64 field_5 = 5;
     int64 field_6 = 6;
 }
 

@@ -608,6 +608,7 @@ module.exports = {
     getSweetPotatoShops: sweetPotatoService.getSweetPotatoShops,
     getSweetPotatoRecords: sweetPotatoService.getSweetPotatoRecords,
     scanSweetPotatoShops: sweetPotatoService.scanShops,
+    refreshSweetPotatoQuote: sweetPotatoService.refreshSweetPotatoQuote,
     operateSweetPotato: sweetPotatoService.operateSweetPotato,
     exchangeSweetPotatoGoods: sweetPotatoService.exchangeSweetPotatoGoods,
     sweetPotatoClaimCommission: sweetPotatoService.claimCommission,

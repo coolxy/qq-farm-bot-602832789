@@ -46,6 +46,7 @@ selector 是 oneof，字段号与 cmd 必须成对出现：只写 cmd 不带 sel
 | 1 | `claims`：`seed_claimed` / `share_claimed`，服务端今日领取标记 |
 | 2 | `share`：`bonus` / `timestamp`，本次分享的暴击加成与时间戳 |
 | 3 | 福气币余额（首次出售前缺失，之后出现；兑换会扣减） |
+| 4 | `actions`：动作标记，实机只保留最近一次动作（卖出 / 分享 / 领种子互相覆盖），**不能**用来判断今天是否已领 |
 | 5 / 6 | 本人铺子今日基础收购价 / 分享暴击加成，**成交价 = 5 + 6** |
 | 7 | 本人铺子今日接收总量 |
 | 11 / 13 | 待领收购提成 / 提成标志（没提成时字段缺失，不是 0） |
@@ -58,6 +59,21 @@ selector 是 oneof，字段号与 cmd 必须成对出现：只写 cmd 不带 sel
 - 下单：cmd 96，参数 `{index, count}`，回包给出真实 `item_id`、单价与兑换后余额。
 
 本地先拦三件事：限购次数、福气币余额（`limit`、`coins` 都来自 cmd 97 与状态槽）、回包单价必须与目录一致。
+
+## 运行时：余额非阻塞快照
+
+活动快照会被面板反复轮询，而网关的 `Bag` 请求排在活动请求之后，并发一满就被挤掉。早期版本在快照里同步 `await` 背包，一次抖动既拖慢快照又只能拿到 0；页面挂载与轮询还会并发打两个快照，后一个失败就覆盖前一个的成功结果，表现是「刚刷新有数字、几秒后整排变 0」。
+
+现在分成两条通道（v3.39.0 按 li 版移植）：
+
+- **`refreshBalances()`**：唯一打网关的通道，同一时刻只允许一个在途请求（单飞合并），最坏重试 250/700ms 两次。
+- **`currentBalances()`**：快照专用，同步读内存，绝不 `await`。内存值超过 10 秒就在后台补一次，不阻塞本次返回。
+
+两级兜底：`BALANCE_CACHE_TTL_MS`（10 秒）内直接复用；读失败但手里有 `BALANCE_STALE_MAX_MS`（10 分钟）内的成功值时继续用旧值并标 `balanceStale`；连一次成功值都没有才下发 `balancesKnown=false`（前端显示 `--`，不是 0）。
+
+- 进程启动 1.2 秒后预热一次（`unref` 定时器），把首个快照的兜底填上。
+- 写操作（领种子 / 分享 / 出售 / 兑换 / 提成 / 收菜补种）成功后立刻 `invalidateBalanceCache()`，后台重读真值；这些接口回填的快照用 `freshBalances: true` 等一次真值。
+- 余额未知时 `actions.sell.enabled` 保持 true——「没读到」不等于「没有蜜薯」，最终由服务端判断。
 
 ## 写操作风控
 
@@ -78,12 +94,16 @@ selector 是 oneof，字段号与 cmd 必须成对出现：只写 cmd 不带 sel
 
 ## 分享暴击
 
-1. `ShareService.CheckCanShare` → `can_share` 为 false 直接放弃（不消耗当日次数）。
-2. `Operate(cmd=98)` → 回包 `claims.share_claimed` 必须为 true。
-3. `ShareService.ReportShare{ field_1: 28, field_4: 2017 }`（来源号 28、场景号 2017）。
-4. 重读 `GetGroup` 确认 `bonus_price > 0`，否则按结果不明处理。
+顺序与官方客户端一致，**先分享、后上报**（v3.39.0 按 li 版改正，之前把 `CheckCanShare` 当门闸放在最前面，会在上报入口临时不可用时白白放弃当天的分享）：
 
-只有第 4 步确认后才会把「今日已分享」落成 `pendingShareDate`，避免分享失败后当天再也不试。自动分享每天只跑一次，`share_claimed` 与当天日期同时成立时直接跳过。
+1. `Operate(cmd=98)` → 回包 `claims.share_claimed` 必须为 true。
+2. `ShareService.CheckCanShare` → `can_share` 为 true 才继续。
+3. `ShareService.ReportShare{ field_1: 28, field_4: 2017 }`（来源号 28、场景号 2017）——**暴击加成到这一步才真正落地**。
+4. 重读 `GetGroup` 确认 `claims.share_claimed`。
+
+第 2/3 步整段是「尽力而为」：抛异常或 `can_share=false` 都只记 `shareReportError`，不阻断主流程，接口把 `shareReported` / `shareReportError` 一起透给前端，面板用警示样式提示「铺子已分享，但暴击上报未确认」。只有第 4 步确认不了才按 `SWEET_POTATO_RESULT_UNKNOWN` 处理。
+
+cmd 98 回包（`SweetPotatoShareReply`）字段号按 li 版对齐：`grant{1:item_id,2:count}` / `price=2` / `field_3` / `shop=4{share_key=2}` / `field_5` / `field_6`。旧版本把 2/3 写成了 `bonus_price`/`price`、4 号当 `bytes` 分享凭证，因为从没读过所以一直没暴露。
 
 ## 收购提成
 
@@ -143,15 +163,17 @@ selector 是 oneof，字段号与 cmd 必须成对出现：只写 cmd 不带 sel
 | GET | `/` | 活动状态（快照里不查目录，`fetchShop=false`） |
 | GET | `/shop-catalog` | 兑换目录（cmd 97） |
 | GET | `/shops?offset=` | 好友铺子列表，每页 5 条，30 秒价格缓存 |
-| GET | `/scan?limit=` | 一键比价：一次扫完（含自家），按成交价降序，上限 100 |
+| GET | `/scan?limit=&force=` | 一键比价：一次扫完（含自家），按成交价降序，上限 100；结果缓存 3 分钟，`force=1` 强制重扫 |
 | GET | `/records` | 收购记录（cmd 95），最近 30 条与提成汇总 |
+| POST | `/quote/refresh` | 刷新本人铺子今日行情（cmd 92 只查自己），拿剩余接收额度 |
 | POST | `/:action` | `claim` / `share` / `sell` / `exchange` / `commission` |
 
-`/:action`、`offset`、`limit` 已登记到 `core/tests/input-surface.test.js` 的 `INPUT_SURFACE`（`service` 类型守卫），新增路由漏登记会让全量测试红。新方法同步注册进 `runtime/data-provider.ts`、`core/worker.ts`、`runtime/worker-manager.ts`，超时表里 `getSweetPotatoShops` 90 秒、`scanSweetPotatoShops` 240 秒（100 家 × 并发 4 × 8 秒）、`getSweetPotatoRecords` 30 秒、`operateSweetPotato` 180 秒。提成领取走同一个 `operateSweetPotato`，不额外加 provider 方法。
+`/:action`、`offset`、`limit`、`force` 已登记到 `core/tests/input-surface.test.js` 的 `INPUT_SURFACE`（`service` 类型守卫），新增路由漏登记会让全量测试红。新方法同步注册进 `runtime/data-provider.ts`、`core/worker.ts`、`runtime/worker-manager.ts`，超时表里 `getSweetPotatoShops` 90 秒、`scanSweetPotatoShops` 240 秒（100 家 × 并发 4 × 8 秒）、`refreshSweetPotatoQuote` 30 秒、`getSweetPotatoRecords` 30 秒、`operateSweetPotato` 180 秒。提成领取走同一个 `operateSweetPotato`，不额外加 provider 方法。
 
 ## 前端
 
-- `web/src/components/activity/SweetPotatoTab.vue`：五格指标（收购价、福气币、蜜薯库存、剩余收购量、待领提成）、四个主操作（领种子 / 分享暴击 / 一键卖自己 / 领取提成）、好友铺子双模式（「分页查询」每页 5 家 +「一键比价」按成交价排序，自家铺子显示「还可收 不限」，停收的置灰并标原因）、选铺出售面板（数量 / 最多 / 全部 / 预计收入 / 二次确认）、兑换目录（序号 + 单价 + 限购 + 数量输入 + 兑换按钮）、收购记录列表（分红明细与时间）、规则折叠；`≤1180px` 三列、`≤767px` 两列。
+- `web/src/components/activity/SweetPotatoTab.vue`：五格指标（收购价、福气币、蜜薯库存、剩余收购量、待领提成）、四个主操作（领种子 / 分享暴击 / 一键卖自己 / 领取提成）、好友铺子双模式（「分页查询」每页 5 家 +「一键比价」按成交价排序，自家铺子显示服务端下发的「还可收 N（自家不限出售）」，停收的置灰并标原因，命中 3 分钟缓存时文案会说明）、选铺出售面板（数量 / 最多 / 全部 / 预计收入 / 二次确认）、兑换目录（序号 + 单价 + 限购 + 数量输入 + 兑换按钮）、收购记录列表（分红明细与时间）、规则折叠；`≤1180px` 三列、`≤767px` 两列。
+- v3.39.0 前端新增：面板工具条的「刷新我的行情」（`POST /quote/refresh`，只读，把剩余接收额度写进「剩余收购量」的提示位并同步比价表里自己那一行）；背包没读到时三处数量显示 `--` 且不禁用出售；分享上报失败用 `.sp-message.warn` 警示样式，不和成功提示混在一起。
 - `web/src/views/activity-center/SweetPotatoActivityPage.vue`：`ActivityShell` + 活动头，独立页承载 Tab。
 - `web/src/stores/activity-center.ts`：`ActivityTabKey` / `ActivityGameplayKey` 加 `sweetPotato`，两处归一化白名单、`inferGameplayKey` 判断链、`SweetPotatoSummaryDto` 与快照字段同步补齐。
 - `web/src/components/settings/AccountFeatureSettings.vue`：设置页 6 个开关，总开关关闭时子开关 `disabled`；开启「自动出售」后展开 3 个数值输入 + 兜底开关；活动结束后整块从设置页隐藏（`activityKeyVisible`）。
@@ -159,7 +181,7 @@ selector 是 oneof，字段号与 cmd 必须成对出现：只写 cmd 不带 sel
 
 ## 验证范围
 
-- `core/tests/sweet-potato.test.js` 22 条：八个 cmd 的 selector 往返（含 cmd 95 落在 195）、状态槽 11/13、`can_sell` 三态（含「回包没带字段」）、自家铺子 `remaining=0` 也能卖、出售后剩余额度按成交数递减、提成领取与无提成不发请求、目录归一化与价格不匹配时不留名字、兑换限购与余额拦截、已领种子不发写请求、价格变化中止、分享未涨价按结果不明、好友价格缓存、开关默认值、活动 ID 绑定玩法；新增比价降序 + 单轮 3 家、兜底卖自己与关兜底、最低出售数量、回包价格对不上停手、收购记录倒序与汇总、空回包。
-- `web/tests/sweet-potato-activity.test.mjs` 7 条：玩法注册、目录入口、页面挂载、设置页 6 个开关与隐藏、提成/自家不限/序号兑换的静态断言、前后端 ID 与时间窗一致、4 个卖薯参数前后端默认值一致 + 比价/记录入口。
-- 全量：core 1087 条、web 373 条全绿；`vue-tsc`、`eslint --max-warnings=0`、`pnpm build` 通过。
+- `core/tests/sweet-potato.test.js` 32 条：八个 cmd 的 selector 往返（含 cmd 95 落在 195）、状态槽 11/13、`can_sell` 三态（含「回包没带字段」）、自家铺子 `remaining=0` 也能卖、出售后剩余额度按成交数递减、提成领取与无提成不发请求、目录归一化与价格不匹配时不留名字、兑换限购与余额拦截、已领种子不发写请求、价格变化中止、分享未涨价按结果不明、好友价格缓存、开关默认值、活动 ID 绑定玩法；新增比价降序 + 单轮 3 家、兜底卖自己与关兜底、最低出售数量、回包价格对不上停手、收购记录倒序与汇总、空回包；v3.39.0 又补了状态槽 4 号子槽与分享回包字段号、分享先发后报（含上报不可用 / 抛异常 / 服务端没记上三条分支）、快照不 await 背包与 stale 回退、余额未知不禁用出售、比价 3 分钟缓存与 `force` 强制重扫、刷新行情查自己、目录 `itemIdMatched`、四个可调参数的显式夹取。
+- `web/tests/sweet-potato-activity.test.mjs` 8 条：玩法注册、目录入口、页面挂载、设置页 6 个开关与隐藏、提成/自家不限/序号兑换的静态断言、前后端 ID 与时间窗一致、4 个卖薯参数前后端默认值一致 + 比价/记录入口；v3.39.0 补一条运行时能力断言（刷新行情入口、`--` 显示、比价缓存标记、分享上报警示样式）。
+- 全量：core 1097 条、web 374 条全绿；`vue-tsc`、`eslint --max-warnings=0`、`pnpm build` 通过。
 - **未在实服验证**的部分：兑换下单（cmd 96）、提成领取（cmd 99）、收购记录（cmd 95）与好友铺子的真实成交都只有假网关验证；自动卖薯的多家切换用的是夹具报价。首次使用请在界面里手动点一次核对余额。

@@ -28,6 +28,8 @@ const API_CALL_TIMEOUTS_MS: Record<string, number> = {
     getSweetPotatoRecords: 30000,
     // 比价一次最多扫 100 家、并发 4，按每家 8 秒超时算，留足余量。
     scanSweetPotatoShops: 240000,
+    // 刷新本人行情只查一家，和 getSweetPotatoShops 同级。
+    refreshSweetPotatoQuote: 30000,
     operateSweetPotato: 180000,
     // 主动加好友：逐条 Enter → ApplyFriend，每条间隔 2 秒，一批可能跑几分钟。
     applyFriendInvites: 10 * 60 * 1000,
