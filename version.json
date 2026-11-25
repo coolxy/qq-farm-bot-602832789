@@ -1,12 +1,20 @@
 {
   "major": 3,
   "minor": 39,
-  "patch": 13,
-  "build": 280,
-  "version": "3.39.13",
-  "updatedAt": "2026-11-25T22:33:58.427Z",
+  "patch": 15,
+  "build": 281,
+  "version": "3.39.15",
+  "updatedAt": "2026-11-25T22:55:18.596Z",
   "lastCommit": "—",
   "history": [
+    {
+      "version": "3.39.15",
+      "build": 281,
+      "date": "2026-11-26",
+      "summary": "修复以薯换福出售时间等配置保存后丢失，统一活动卡片背景色",
+      "commit": "—",
+      "type": "patch"
+    },
     {
       "version": "3.39.13",
       "build": 280,

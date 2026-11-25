@@ -52,3 +52,8 @@ test('面板自带开关行样式（父组件是 scoped，样式不会穿透）'
   assert.match(panel, /<style scoped>/)
   assert.ok(panel.includes('.automation-setting-item'), '缺少 automation-setting-item 样式，开关行会失去边框')
 })
+
+test('活动卡片内用统一的中性背景，不再给以薯换福单独上色', () => {
+  assert.doesNotMatch(panel, /bg-rose-/, '不应出现 rose 背景/边框，和活动弹窗里其他卡片保持同一底色')
+  assert.match(panel, /border-gray-100 rounded-lg p-4 space-y-3 dark:border-gray-700/, '应与节令小札卡片的容器样式一致')
+})

@@ -24,7 +24,7 @@ const enabled = computed(() => automation.value.automation.yishu_enabled !== fal
 
 <template>
   <section
-    class="min-w-0 border border-rose-200 rounded-xl bg-rose-50/60 p-4 space-y-4 dark:border-rose-900/50 dark:bg-rose-900/10"
+    class="min-w-0 border border-gray-100 rounded-lg p-4 space-y-3 dark:border-gray-700"
     aria-label="以薯换福活动自动化"
   >
     <div class="space-y-1">
@@ -113,7 +113,7 @@ const enabled = computed(() => automation.value.automation.yishu_enabled !== fal
         </div>
       </div>
 
-      <div class="rounded-lg bg-white/70 p-3 space-y-3 dark:bg-gray-900/30">
+      <div class="rounded-lg bg-gray-50 p-3 space-y-3 dark:bg-gray-800/60">
         <div class="text-sm text-gray-800 font-medium dark:text-gray-200">
           比价范围与兜底
         </div>

@@ -512,6 +512,20 @@ function clampYishuNumber(value: unknown, range: [number, number]): number {
     return Math.max(range[0], Math.min(range[1], parsed));
 }
 
+/**
+ * 以薯换福配置统一归一化：数值走区间夹取，时间串走 HH:MM，其余按布尔。
+ *
+ * 必须共用这一份：applyConfigSnapshot 的兜底分支是 `!!v`，会把 "23:00" 存成 true、
+ * 把 6 存成 true，导致面板上选的出售时间保存后消失。新增 yishu_* 键时只要加进
+ * YISHU_NUMERIC_RANGES 或这里的时间分支，两处保存链路自动同步。
+ */
+function normalizeYishuAutomationValue(key: string, value: unknown): any {
+    const range = YISHU_NUMERIC_RANGES[key];
+    if (range) return clampYishuNumber(value, range);
+    if (key === 'yishu_sell_after_time') return normalizeSellAfterTime(value);
+    return value === true || value === 'true';
+}
+
 function cloneAccountConfig(base: Partial<AccountConfig> = DEFAULT_ACCOUNT_CONFIG): AccountConfig {
     const srcAutomation = (base && base.automation && typeof base.automation === 'object')
         ? migrateRanchMarketAutomation(base.automation)
@@ -608,7 +622,9 @@ function normalizeAccountConfig(input: unknown, fallback: AccountConfig = accoun
         }
         for (const [k, v] of Object.entries(migrateRanchMarketAutomation(src.automation))) {
             if (!ALLOWED_AUTOMATION_KEYS.has(k)) continue;
-            if (k === 'fertilizer') {
+            if (k.startsWith('yishu_')) {
+                (cfg.automation as any)[k] = normalizeYishuAutomationValue(k, v);
+            } else if (k === 'fertilizer') {
                 (cfg.automation as any)[k] = normalizeFertilizerMode(v, cfg.automation.fertilizer);
             } else if (k === 'fertilizer_land_types') {
                 cfg.automation.fertilizer_land_types = normalizeFertilizerLandTypes(v, cfg.automation.fertilizer_land_types);
@@ -946,6 +962,7 @@ module.exports = {
     get systemConfigMigrated() { return systemConfigMigrated; },
     set systemConfigMigrated(v: boolean) { systemConfigMigrated = !!v; },
     // Helpers
+    normalizeYishuAutomationValue,
     normalizeKnownFriendGids,
     normalizeKnownFriendGidSyncCooldownSec,
     normalizeFriendsListCacheTtlSec,

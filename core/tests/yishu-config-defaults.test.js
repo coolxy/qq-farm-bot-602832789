@@ -9,6 +9,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const { cloneAccountConfig, DEFAULT_ACCOUNT_CONFIG } = require('../dist/models/store/shared-state');
+const { applyConfigSnapshot } = require('../dist/models/store/account-config');
 
 function yishu(config = {}) {
     return cloneAccountConfig(config).automation;
@@ -75,4 +76,38 @@ test('默认配置对象本身与归一化结果一致（防止只改一处）',
         if (!key.startsWith('yishu_')) continue;
         assert.deepEqual(cloned[key], defaults[key], `默认值不一致: ${key}`);
     }
+});
+
+// ---------- 保存链路：applyConfigSnapshot 的兜底分支会把未知键当布尔 ----------
+
+test('保存快照后出售时间仍是字符串，数值项仍是数字（不会被 !!v 变成 true）', () => {
+    const saved = applyConfigSnapshot({
+        automation: {
+            yishu_sell_after_time: '22:30',
+            yishu_commission_interval_hours: 12,
+            yishu_scan_interval_hours: 3,
+            yishu_sell_min_gain: 5,
+            yishu_sell_keep_count: 7,
+            yishu_scan_friend_limit: 30,
+            yishu_sell_min_count: 2,
+            yishu_enabled: false,
+        },
+    }, { persist: false, accountId: '' });
+    const a = saved.automation;
+    assert.equal(a.yishu_sell_after_time, '22:30');
+    assert.equal(typeof a.yishu_sell_after_time, 'string');
+    assert.equal(a.yishu_commission_interval_hours, 12);
+    assert.equal(a.yishu_scan_interval_hours, 3);
+    assert.equal(a.yishu_sell_min_gain, 5);
+    assert.equal(a.yishu_sell_keep_count, 7);
+    assert.equal(a.yishu_scan_friend_limit, 30);
+    assert.equal(a.yishu_sell_min_count, 2);
+    assert.equal(a.yishu_enabled, false);
+});
+
+test('保存时显式留空的出售时间不会被默认值改回 23:00', () => {
+    const saved = applyConfigSnapshot({
+        automation: { yishu_sell_after_time: '' },
+    }, { persist: false, accountId: '' });
+    assert.equal(saved.automation.yishu_sell_after_time, '');
 });
