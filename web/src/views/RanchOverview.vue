@@ -105,13 +105,15 @@ const stockTiles = computed(() => {
     image: Number(bucket.id) === 7004 ? '/game-config/ranch-icons/can-organic.png' : '/game-config/ranch-icons/can-normal.png',
     value: formatHours(state.value?.buckets?.find((b: any) => Number(b.id) === bucket.id)?.seconds ?? 0),
   }))
-  const normalPoints = book.value?.normal?.progress
-  const giantPoints = book.value?.giant?.score
+  // 图鉴卡片显示「已解锁 / 总条目」，口径与农场首页的作物 / 超变图鉴一致。
+  const animals: any[] = Array.isArray(book.value?.animals) ? book.value.animals : []
+  const unlockedCount = (pick: (entry: any) => boolean) => animals.filter(entry => pick(entry)).length
+  const fraction = (unlocked: number) => animals.length ? `${unlocked}/${animals.length}` : '—'
   return [
     ...cans,
     // 图标用 resource-icons 里 219px 的官方大图，ranch-icons 里 32px 的小图在卡片上发糊。
-    { key: 'book-normal', label: '普通图鉴', image: '/game-config/resource-icons/illustrated-crop.png', value: normalPoints != null ? formatCount(normalPoints) : '—' },
-    { key: 'book-giant', label: '巨大图鉴', image: '/game-config/resource-icons/illustrated-mutant.png', value: giantPoints != null ? formatCount(giantPoints) : '—' },
+    { key: 'book-normal', label: '普通图鉴', image: '/game-config/resource-icons/illustrated-crop.png', value: fraction(unlockedCount(entry => entry.unlocked === true)) },
+    { key: 'book-giant', label: '巨大化图鉴', image: '/game-config/resource-icons/illustrated-mutant.png', value: fraction(unlockedCount(entry => entry.giant?.unlocked === true)) },
   ]
 })
 
