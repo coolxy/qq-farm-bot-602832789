@@ -15,7 +15,8 @@
 
 | 版本 | 更新序号 | 日期 | 更新内容 | 提交 |
 | --- | --- | --- | --- | --- |
-| v3.39.8 | #275 | 2026-11-26 | 修复以薯换福活动页无法下滑 | — |
+| v3.39.9 | #276 | 2026-11-26 | 同步上游以薯换福自动卖薯修复与自定义开始时间 | — |
+| v3.39.8 | #275 | 2026-11-26 | 常规更新 | — |
 | v3.39.7 | #273 | 2026-11-26 | 常规更新 | — |
 | v3.39.6 | #272 | 2026-11-26 | 以薯换福页面完全按 li 版重做 | — |
 | v3.39.5 | #271 | 2026-11-26 | 按 li 版设计稿重构以薯换福活动页，修复补种模块路径与面板版本号不同步 | — |
@@ -262,6 +263,40 @@ flowchart TB
 ```
 
 ## 详细记录
+
+### 2026-11-26 · v3.39.9（#276） · 同步上游以薯换福自动卖薯修复与自定义开始时间
+
+上游 `muyuewang/qq-farm-bot-li` 从本地上次的对照点 `678e4b1` 前进到 `27ad69f`。这段里以薯换福被上游自己改了 6 次，其中前 3 次（`a34fcf3` / `b502f7e` / `5c29f10`）本地在 v3.39.7 已经按 zip 逐字移植，**基线锁定在 `5c29f10`**（6 个关键文件逐字节一致）。本轮同步的是之后 3 个提交，加上沿途不冲突的通用修复。
+
+**一、以薯换福增量（`5c29f10 → 27ad69f`，基线文件级对齐）**
+
+- `4d86c5b`：自动卖薯定时器被静默清掉、余额读不到 —— 补诊断日志与看门狗。
+- `d761a79`：自动卖薯**读错字段导致永不卖出**（这是真 BUG，本地同款实现里也一样错）；新增手填 GID 卖薯。
+- `27ad69f`：自动卖薯支持**自定义开始时间**（`yishu_sell_after_time`，`"HH:MM"`，空串 = 不限），以及**面板全账号好友比价**（扫描池从单账号扩到所有在跑账号，去重后轮转窗口）。
+- 落地文件（`git merge-file` 三方合并，零冲突）：`services/activity-center/yishuhuanfu.ts`、`services/yishuhuanfu-auto.ts`、`web/src/components/activity/YishuHuanfuTab.vue`、`web/src/views/activity-center/YishuHuanfuActivityPage.vue`、`web/src/stores/activity-center.ts` 与三个 yishuhuanfu 测试。
+- 配置面：`shared-state.ts` 新增 `yishu_sell_after_time` 默认值与 `normalizeSellAfterTime()`（非法值一律当「不限时段」，闸门只推迟卖薯、绝不彻底停卖），`yishu_scan_friend_limit` 上限 50 → 200；`types/config.ts` 与 `web/src/stores/setting.ts` 同步字段。
+- 页面滚动适配保留：`.yshf-view` 仍是本页的滚动容器（本地外层 `overflow:hidden`），合并后重新核对了 `overflow-y:auto`、`min-height:0`、`> * { flex:none }` 三件套。
+
+**二、按需采纳的通用项**
+
+- `core/src/controllers/admin/debug-routes.ts` + `services/debug-proto.ts`：调试协议路由，挂到 `admin/index.ts`（叠加在本地 career / panel-notification 之后）。
+- `napcat/plugins/qq-miniapp-openauth`：恢复本地被误删的登录插件（`full-review-regression` 在钉它）。
+- `gameConfig/Plant.json` 与 10 张道具图、`web/public/activity-assets/pet-diary/` 120+ 张活动素材：取上游新版。
+- `docs/yishuhuanfu-20261125.md`：上游对本活动的协议说明。
+
+**三、明确跳过（与本地架构冲突，保留本地实现）**
+
+- **网络层重构**：`utils/stall-probe.ts` / `tcp-queue.ts` / `traffic-meter.ts` 与 `network.ts`、`worker-manager.ts`、`runtime-engine.ts` 的配套改动。本地这套是另一套重写（请求优先级、队列、探针），上游是并行另一版，合并只会两边都坏。
+- **QQ 机器人单聊推送**：`services/qq-bot-push.ts`（1400+ 行）+ 前端 786 行设置面板。它要在 `runtime-engine` 里建服务、在 `account-routes` 挂 14 条路由、在 `global-config` 存配置、在 `Settings.vue` 挂面板 —— 全部落在本地重写过的文件上，属于独立一轮的活。
+- **牧歌 / 节令自动化抽离**（`muge-auto.ts` / `solar-calendar-auto.ts` / `ranch/muge.ts`）：本地已有等价实现（`startMugeAutomationTimer` 等），引入会双跑。
+- **设置页双列瀑布流**（`5c29f10` 的布局改动）与部署脚本 `tools/updater/*`、`compose.sh`、`start.sh`、`docker-compose.yml`。
+- 上游新增的 `scheduler-phase` / `worker-manager-code-retry` / `farm-fertilizer-gate` / `ranch-illustrated-automation` 测试：断言的是跳过的那些实现，按「不测未同步代码」删除。
+
+**四、验证**
+
+- `pnpm build:core` / `pnpm build:web` 均通过。
+- core 测试 **1135 条全绿**、web 测试 **380 条全绿**（新增上游 yishuhuanfu 用例已并入）。
+- 合并过程踩到两次「双方都加了同一段」导致重复（`ActivityCenter.vue` 的活动页挂载与 import、`AutomationSettingsForm.vue` 的以薯换福卡片、`admin/activity-center/index.ts` 的路由注册），已逐个去重。
 
 ### 2026-11-26 · v3.39.7（#273） · 完整移植 li 版以薯换福，删除本地 sweet-potato 全链路
 

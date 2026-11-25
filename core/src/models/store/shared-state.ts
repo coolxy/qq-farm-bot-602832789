@@ -84,6 +84,8 @@ const DEFAULT_ACCOUNT_CONFIG: AccountConfig = {
         yishu_scan_friend_limit: 20,
         yishu_scan_interval_minutes: 30,
         yishu_sell_min_count: 1,
+        // 空串 = 不限时段，和改造前的行为一致；填了 "HH:MM" 就等过了这个点才卖。
+        yishu_sell_after_time: '',
         farm: true,
         farm_harvest_tiangong: true,
         farm_push: true,
@@ -468,10 +470,27 @@ function normalizeIntervals(intervals: Partial<IntervalConfig> | undefined): Int
  * 「每轮扫几家」退化成 1，或者 5~720 分钟的比价间隔变成 0（等于每轮都全量扫好友）。
  */
 const YISHU_NUMERIC_RANGES: Record<string, [number, number]> = {
-    yishu_scan_friend_limit: [1, 50],
+    yishu_scan_friend_limit: [1, 200],
     yishu_scan_interval_minutes: [5, 720],
     yishu_sell_min_count: [1, 10000],
 };
+
+/**
+ * 卖薯开始时间 "HH:MM"。空串 / 非法值一律当「不限时段」，避免把界面输错的东西
+ * 变成「永远不卖」——闸门只推迟卖薯，绝不该让它彻底停下。
+ */
+function normalizeSellAfterTime(value: unknown): string {
+    const raw = String(value ?? '').trim();
+    if (!raw) return '';
+    const match = /^(\d{1,2})\s*[:：]\s*(\d{1,2})$/.exec(raw);
+    if (!match) return '';
+    const hour = Number(match[1]);
+    const minute = Number(match[2]);
+    if (!Number.isFinite(hour) || !Number.isFinite(minute)) return '';
+    const clampedHour = Math.max(0, Math.min(23, hour));
+    const clampedMinute = Math.max(0, Math.min(59, minute));
+    return `${String(clampedHour).padStart(2, '0')}:${String(clampedMinute).padStart(2, '0')}`;
+}
 
 function clampYishuNumber(value: unknown, range: [number, number]): number {
     const parsed = Number.parseInt(String(value), 10);
@@ -494,6 +513,11 @@ function cloneAccountConfig(base: Partial<AccountConfig> = DEFAULT_ACCOUNT_CONFI
             if (srcAutomation[key] !== undefined) {
                 (automation as any)[key] = clampYishuNumber(srcAutomation[key], yishuRange);
             }
+            continue;
+        }
+        // "HH:MM" 是字符串项，不显式归一就会被当普通值透传，界面输错就永久不卖。
+        if (key === 'yishu_sell_after_time') {
+            (automation as any)[key] = normalizeSellAfterTime(srcAutomation[key]);
             continue;
         }
         if (srcAutomation[key] !== undefined) (automation as any)[key] = (srcAutomation as any)[key];

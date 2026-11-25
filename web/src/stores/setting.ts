@@ -93,6 +93,8 @@ export interface AutomationConfig {
   yishu_scan_friend_limit?: number
   yishu_scan_interval_minutes?: number
   yishu_sell_min_count?: number
+  /** 到点之后才开始卖薯（"HH:MM"，空串 = 不限时段） */
+  yishu_sell_after_time?: string
   // 七夕
   qixi_dew_use?: boolean
   qixi_bridge_build?: boolean

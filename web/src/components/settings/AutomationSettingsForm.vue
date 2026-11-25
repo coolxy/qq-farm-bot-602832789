@@ -45,6 +45,20 @@ const emit = defineEmits<{
 }>()
 
 const settings = defineModel<AutomationSettingsFormModel>({ required: true })
+
+// 出售时间：30 分钟一档，空串 = 不限。到点之后每一轮自动任务都会按原逻辑卖，
+// 不是一次性定时任务，所以不需要秒级精度，也不存在调度卡点失败的问题。
+const sellTimeOptions = computed(() => {
+  const options: Array<{ label: string, value: string }> = [
+    { label: '不限时段（随时可卖）', value: '' },
+  ]
+  for (let minutes = 0; minutes < 24 * 60; minutes += 30) {
+    const label = `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`
+    options.push({ label, value: label })
+  }
+  return options
+})
+
 const ripeningOnly = computed(() => ['normal_ripen', 'organic_ripen'].includes(settings.value.automation.fertilizer ?? 'none'))
 const ripeningEnabled = computed(() => ripeningOnly.value || settings.value.automation.fertilizer === 'smart')
 const ripeningFertilizerLabel = computed(() => settings.value.automation.fertilizer === 'normal_ripen' ? '普通化肥' : '有机化肥')
@@ -67,6 +81,7 @@ const ranchSwitches = [
   ['ranch_illustrated', '自动领取图鉴奖励'],
   ['ranch_share', '每日分享礼包'],
   ['ranch_daily_benefit', '每日商城福利'],
+  ['ranch_muge', '牧歌初启奖励'],
 ] as const
 const ranchFriendSwitches = [
   ['ranch_friend_steal', '自动偷取产物'],
@@ -413,6 +428,137 @@ const ranchFeedStages = [
 
         <section class="farm-card rounded-2xl p-4">
           <div class="mb-4 flex items-start gap-3">
+            <div class="h-9 w-9 flex shrink-0 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600 dark:bg-emerald-900/25 dark:text-emerald-400">
+              <span class="i-carbon-calendar text-xl" />
+            </div>
+            <div>
+              <h4 class="text-base text-gray-900 font-bold dark:text-gray-100">
+                节令日历
+              </h4>
+              <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                三项都在服务端判定「这一步可做」时才发请求，默认开
+              </p>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <div class="automation-setting-item">
+              <BaseSwitch v-model="settings.automation.solar_calendar_claim_events" label="自动领取节令直达奖励" />
+            </div>
+            <div class="automation-setting-item">
+              <BaseSwitch v-model="settings.automation.solar_calendar_claim_seasons" label="自动领取季度奖励" />
+            </div>
+            <div class="automation-setting-item">
+              <BaseSwitch v-model="settings.automation.solar_calendar_answer_quiz" label="自动节令答题（仅官方标注过答案的）" />
+            </div>
+          </div>
+          <p class="mt-3 text-xs text-gray-500 dark:text-gray-400">
+            半小时检查一次，三步排队执行、项间隔 800ms，一轮最多领 5 个节令、答 3 题、领 3 个季度，剩下的下一轮接着做；不在开放窗口、或者这一步已经做过，只按天记一行跳过日志，不发写请求。答题排在季度领取之前，这样同一轮里季度就能达标。
+          </p>
+          <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+            答题只提交官方活动配置里标注过 <code>answer_index</code> 的节令（2026-10-19 起：重阳选「A.敬老节」、霜降选「C.最后一个」）。没有标注就一行跳过、绝不动手写请求，因为答错要锁到第二天——那种题请在「节令日历」页面自己点，页面上已经把「正确答案」标出来了。标注的答案若出现在服务端给的错项记录里，也当标注不可信、跳过。
+          </p>
+        </section>
+
+        <section class="farm-card rounded-2xl p-4">
+          <div class="mb-4 flex items-start gap-3">
+            <div class="h-9 w-9 flex shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-600 dark:bg-amber-900/25 dark:text-amber-400">
+              <span class="i-carbon-gift text-xl" />
+            </div>
+            <div>
+              <h4 class="text-base text-gray-900 font-bold dark:text-gray-100">
+                牧歌初启
+              </h4>
+              <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                都在服务端判定「这一步可做」时才发请求，默认开
+              </p>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <div class="automation-setting-item">
+              <BaseSwitch v-model="settings.automation.muge_claim_rewards" label="自动领取四类奖励（全服档位 / 好友助力 / 手册任务 / 手册积分档位）" />
+            </div>
+            <div class="automation-setting-item">
+              <BaseSwitch v-model="settings.automation.muge_finish_survey" label="答完题后自动结算人格并领首次分享奖励" />
+            </div>
+          </div>
+          <p class="mt-3 text-xs text-gray-500 dark:text-gray-400">
+            半小时检查一次，一轮只读一次活动状态，四类领取排队执行、笔间隔 800ms，每类一次写就领完该类全部可领项。手册任务排在积分档位之前，这样同一轮里积分就能达标。不在开放窗口、或者这一步已经做过，只按天记一行跳过日志，不发写请求；某一笔写入回包未确认就中止本轮、绝不重试，剩下的下一轮重新读。
+          </p>
+          <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+            人格测试<strong>不会替你选答案</strong>：10 题全部作答是服务端结算的前置条件，只有你已经在游戏里答完、却没按结算时才会结算，随后领一次性的首次分享奖励。没答完就一行跳过，留给你在「牧歌初启」页面自己选——答案决定你的牧场人格，属于你的偏好。
+          </p>
+          <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+            牧歌是农场场景的活动（与节令同侧），全程不切场景；整个任务串进和农场/牧场同一把全局锁，任务之间留 1500ms 缝，不会并发抢连接。
+          </p>
+        </section>
+
+        <section class="farm-card rounded-2xl p-4">
+          <div class="mb-4 flex items-start gap-3">
+            <div class="h-9 w-9 flex shrink-0 items-center justify-center rounded-lg bg-rose-50 text-rose-600 dark:bg-rose-900/25 dark:text-rose-400">
+              <span class="i-carbon-crop-growth text-xl" />
+            </div>
+            <div>
+              <h4 class="text-base text-gray-900 font-bold dark:text-gray-100">
+                以薯换福
+              </h4>
+              <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                领种子 / 分享 / 收提成都是「服务端说能做」才发一次写，卖薯先比价再卖
+              </p>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <div class="automation-setting-item">
+              <BaseSwitch v-model="settings.automation.yishu_claim_seed" label="每日自动领取红薯种子" />
+            </div>
+            <div class="automation-setting-item">
+              <BaseSwitch v-model="settings.automation.yishu_share" label="每日自动分享铺子（触发暴击涨价）" />
+            </div>
+            <div class="automation-setting-item">
+              <BaseSwitch v-model="settings.automation.yishu_claim_commission" label="自动领取小铺收购提成" />
+            </div>
+            <div class="automation-setting-item sm:col-span-2">
+              <BaseSwitch v-model="settings.automation.yishu_auto_sell" label="红薯成熟后自动卖薯（按好友收购价从高到低）" />
+            </div>
+          </div>
+
+          <div v-if="settings.automation.yishu_auto_sell" class="mt-3 rounded-lg bg-gray-50 p-3 space-y-3 dark:bg-gray-800/60">
+            <div class="text-sm text-gray-800 font-medium dark:text-gray-200">
+              卖薯比价
+            </div>
+            <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <BaseInput v-model.number="settings.automation.yishu_scan_friend_limit" label="参与比价的好友数上限" type="number" min="1" max="200" />
+              <BaseInput v-model.number="settings.automation.yishu_scan_interval_minutes" label="两次比价间隔 (分钟)" type="number" min="5" max="720" />
+              <BaseInput v-model.number="settings.automation.yishu_sell_min_count" label="起卖数量 (个)" type="number" min="1" max="10000" />
+              <BaseSelect
+                v-model="settings.automation.yishu_sell_after_time"
+                label="开始售卖时间"
+                :options="sellTimeOptions"
+              />
+            </div>
+            <BaseSwitch v-model="settings.automation.yishu_sell_fallback_own" label="好友铺子都收满时，剩下的卖给自己铺子" />
+            <p class="text-xs text-gray-500 dark:text-gray-400">
+              「开始售卖时间」不是精准卡点：选了 23:00，就是过了 23:00 之后每一轮自动任务（10 分钟一次）都按下面的逻辑卖，
+              校验、比价、额度判断完全不变。等晚一点的好处是好友当天基本都分享过、暴击加成已经加上，价格排在前面；
+              代价是高价铺子的额度可能被别人先吃满，届时会按价格往下找。留空表示不限时段。
+            </p>
+          </div>
+
+          <p class="mt-3 text-xs text-gray-500 dark:text-gray-400">
+            10 分钟检查一次：今日还没领种子、还没分享才各发一次写，服务端已经标记过的只按天记一行跳过日志。背包里蜜薯达到「起卖数量」才进入比价，比价（cmd 92 逐个查铺子）按「两次比价间隔」节流，间隔内复用上一轮的排序，不会每轮都把候选铺子扫一遍。
+          </p>
+          <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+            候选池不再只有本账号好友：面板里每个账号同步下来的好友 GID 都会并进来（蜜薯本来就能卖给非好友，只要对方开着铺子）。候选超过上限时按轮换窗口扫，几轮下来能覆盖全部。卖薯按成交价（基础价 + 加成）从高到低贪心：最高价那家额度够就卖给它，不够就吃满额度再换第二高；单轮最多切 3 家铺子、笔间隔 1200ms，剩下的留到下一轮。
+          </p>
+          <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+            提成是好友把蜜薯卖进你铺子后产生的，到账后自动领，一轮一次、没有可领就跳过。整个任务串进和农场/牧场同一把全局锁，不会和别的自动化抢连接。
+          </p>
+        </section>
+
+        <section class="farm-card rounded-2xl p-4">
+          <div class="mb-4 flex items-start gap-3">
             <div class="h-9 w-9 flex shrink-0 items-center justify-center rounded-lg bg-violet-50 text-violet-600 dark:bg-violet-900/25 dark:text-violet-400">
               <span class="i-carbon-store text-xl" />
             </div>
@@ -470,58 +616,6 @@ const ranchFeedStages = [
           </p>
         </section>
 
-        <section class="farm-card rounded-2xl p-4">
-          <div class="mb-4 flex items-start gap-3">
-            <div class="h-9 w-9 flex shrink-0 items-center justify-center rounded-lg bg-rose-50 text-rose-600 dark:bg-rose-900/25 dark:text-rose-400">
-              <span class="i-carbon-crop-growth text-xl" />
-            </div>
-            <div>
-              <h4 class="text-base text-gray-900 font-bold dark:text-gray-100">
-                以薯换福
-              </h4>
-              <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
-                领种子 / 分享 / 收提成都是「服务端说能做」才发一次写，卖薯先比价再卖
-              </p>
-            </div>
-          </div>
-
-          <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <div class="automation-setting-item">
-              <BaseSwitch v-model="settings.automation.yishu_claim_seed" label="每日自动领取红薯种子" />
-            </div>
-            <div class="automation-setting-item">
-              <BaseSwitch v-model="settings.automation.yishu_share" label="每日自动分享铺子（触发暴击涨价）" />
-            </div>
-            <div class="automation-setting-item">
-              <BaseSwitch v-model="settings.automation.yishu_claim_commission" label="自动领取小铺收购提成" />
-            </div>
-            <div class="automation-setting-item sm:col-span-2">
-              <BaseSwitch v-model="settings.automation.yishu_auto_sell" label="红薯成熟后自动卖薯（按好友收购价从高到低）" />
-            </div>
-          </div>
-
-          <div v-if="settings.automation.yishu_auto_sell" class="mt-3 rounded-lg bg-gray-50 p-3 space-y-3 dark:bg-gray-800/60">
-            <div class="text-sm text-gray-800 font-medium dark:text-gray-200">
-              卖薯比价
-            </div>
-            <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <BaseInput v-model.number="settings.automation.yishu_scan_friend_limit" label="比价好友数上限" type="number" min="1" max="50" />
-              <BaseInput v-model.number="settings.automation.yishu_scan_interval_minutes" label="两次比价间隔 (分钟)" type="number" min="5" max="720" />
-              <BaseInput v-model.number="settings.automation.yishu_sell_min_count" label="起卖数量 (个)" type="number" min="1" max="10000" />
-            </div>
-            <BaseSwitch v-model="settings.automation.yishu_sell_fallback_own" label="好友铺子都收满时，剩下的卖给自己铺子" />
-          </div>
-
-          <p class="mt-3 text-xs text-gray-500 dark:text-gray-400">
-            10 分钟检查一次：今日还没领种子、还没分享才各发一次写，服务端已经标记过的只按天记一行跳过日志。背包里蜜薯达到「起卖数量」才进入比价，比价（cmd 92 逐个查好友铺子）按「两次比价间隔」节流，间隔内复用上一轮的排序，不会每轮都把好友扫一遍。
-          </p>
-          <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
-            卖薯按成交价（基础价 + 加成）从高到低贪心：最高价那家额度够就卖给它，不够就吃满额度再换第二高，往下依次；单轮最多切 3 家铺子、笔间隔 1200ms，剩下的留到下一轮。好友数上限越小、比价间隔越长，单轮请求越少——好友多的号建议把上限压到 10-20 之间。
-          </p>
-          <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
-            提成是好友把蜜薯卖进你铺子后产生的，到账后自动领，一轮一次、没有可领就跳过。整个任务串进和农场/牧场同一把全局锁，不会和别的自动化抢连接。
-          </p>
-        </section>
       </div>
     </div>
 
@@ -544,18 +638,20 @@ const ranchFeedStages = [
   background: color-mix(in srgb, var(--ui-surface-strong) 58%, transparent);
 }
 
+/* 双列瀑布流：卡片按实际高度自动分配到两列，避免一列空着、另一列一路往下堆。
+   列宽下限 340px，内容区不够宽时自动退化成单列；列内的分组容器用 contents 拍平。 */
 .automation-card-layout {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-items: start;
-  gap: 1rem;
+  columns: 340px 2;
+  column-gap: 1rem;
 }
 
 .automation-card-column {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 1rem;
+  display: contents;
+}
+
+.automation-card-layout section {
+  break-inside: avoid;
+  margin-bottom: 1rem;
 }
 
 .automation-setting-item {
@@ -575,19 +671,13 @@ const ranchFeedStages = [
 }
 
 @media (max-width: 1279px) {
-  .automation-card-layout {
-    display: block;
-  }
-
-  .automation-card-column {
-    display: contents;
-  }
-
+  /* 窄屏由 columns 自动退化，这里只兜住旧分支的间距。 */
   .automation-card-layout section {
     margin-bottom: 1rem;
   }
 }
+/* 牧场只有一组卡片，强制单列（columns 在 display:block 上依然生效，必须显式关掉）。 */
 .automation-card-layout--single {
-  display: block;
+  columns: 1;
 }
 </style>

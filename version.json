@@ -1,12 +1,20 @@
 {
   "major": 3,
   "minor": 39,
-  "patch": 8,
-  "build": 275,
-  "version": "3.39.8",
-  "updatedAt": "2026-11-25T20:07:18.586Z",
+  "patch": 9,
+  "build": 276,
+  "version": "3.39.9",
+  "updatedAt": "2026-11-25T20:33:10.651Z",
   "lastCommit": "—",
   "history": [
+    {
+      "version": "3.39.9",
+      "build": 276,
+      "date": "2026-11-26",
+      "summary": "同步上游以薯换福自动卖薯修复与自定义开始时间",
+      "commit": "—",
+      "type": "patch"
+    },
     {
       "version": "3.39.8",
       "build": 275,

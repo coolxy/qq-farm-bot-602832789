@@ -443,6 +443,9 @@ export interface YishuHuanfuFriendShopDto {
   canSell: boolean | null
   // 自家铺子不占好友额度，界面显示「不限」而不是「还可收 N 个」。
   unlimited: boolean
+  // 候选来源：本账号好友 / 面板里其它账号的好友 / 自己。其它账号好友也可能收蜜薯。
+  via: 'own' | 'friend' | 'panel'
+  panelAccount: string
 }
 
 /**
@@ -467,6 +470,9 @@ export interface YishuHuanfuFriendScanDto {
   scanned: number
   failed: number
   friendCount: number
+  panelFriendCount: number
+  candidateCount: number
+  pendingCount: number
   friendListError: string
   scannedAt: number
   cached: boolean
@@ -2526,6 +2532,45 @@ export const useActivityCenterStore = defineStore('activity-center', () => {
     return mutate('giftQixiSachet', '/qixi/gift', accountId, { friendGid, messageTextId })
   }
 
+  /**
+   * 查任意 GID 的铺子行情（cmd 92）。好友列表里的铺子本来就是这条命令查出来的，
+   * 这里只是放开「手动填 GID」——蜜薯能卖给陌生人，不需要先加好友。
+   * 返回结构与好友比价列表一致，界面可以复用同一套额度/单价渲染。
+   */
+  async function queryYishuHuanfuShopQuote(accountId: string, gid: string): Promise<YishuHuanfuFriendShopDto | null> {
+    const requestedAccountId = String(accountId || '').trim()
+    const targetGid = String(gid || '').trim()
+    if (!requestedAccountId || !targetGid)
+      return null
+    const response = await api.get('/api/activity-center/yishuhuanfu/shop', {
+      headers: { 'x-account-id': requestedAccountId },
+      params: { friendGid: targetGid },
+      skipErrorToast: true,
+    } as any)
+    const payload = record(responsePayload(response.data))
+    const shop = record(payload.shop)
+    const price = text(payload.price)
+    const bonus = text(payload.bonus)
+    const totalPrice = text(payload.totalPrice, payload.total_price, price)
+    return {
+      gid: text(shop.gid, payload.targetGid, targetGid),
+      name: text(shop.name),
+      avatar: text(shop.avatar),
+      level: text(shop.level),
+      own: bool(payload.own),
+      price,
+      bonus,
+      totalPrice,
+      quota: text(payload.quota),
+      quotaCap: text(payload.quotaCap, payload.quota_cap),
+      quotaUsed: text(payload.quotaUsed, payload.quota_used),
+      canSell: payload.canSell === null || payload.canSell === undefined ? null : bool(payload.canSell, payload.can_sell),
+      unlimited: bool(payload.own),
+      via: 'friend',
+      panelAccount: '',
+    }
+  }
+
   // 把自己铺子的剩余接收额度（cmd 92）并回快照，供进度条展示。
   async function loadYishuHuanfuShop(accountId: string) {
     const requestedAccountId = String(accountId || '').trim()
@@ -2612,16 +2657,23 @@ export const useActivityCenterStore = defineStore('activity-center', () => {
             : bool(entry.canSell, entry.can_sell),
           // 自家铺子不占好友额度，界面固定显示「不限」。
           unlimited: bool(entry.unlimited) || bool(entry.own),
+          via: (text(entry.via) || (bool(entry.own) ? 'own' : 'friend')) as 'own' | 'friend' | 'panel',
+          panelAccount: text(entry.panelAccount, entry.panel_account),
         }
       })
       yishuHuanfuFriendScanAt.value = finiteNumber(first(payload.scannedAt, payload.scanned_at)) || Date.now()
       const scanned = finiteNumber(first(payload.scanned)) || 0
       const failed = finiteNumber(first(payload.failed)) || 0
       const friendListError = text(payload.friendListError, payload.friend_list_error)
+      const panelFriendCount = finiteNumber(first(payload.panelFriendCount, payload.panel_friend_count)) || 0
+      const pendingCount = finiteNumber(first(payload.pendingCount, payload.pending_count)) || 0
       yishuHuanfuFriendScanNote.value = friendListError
         || (scanned === 0
-          ? '没有可查询的好友铺子'
-          : `已扫描 ${yishuHuanfuFriendShops.value.length} 个铺子${failed ? `，${failed} 个查询失败` : ''}`)
+          ? '没有可查询的铺子'
+          : `已扫描 ${yishuHuanfuFriendShops.value.length} 个铺子`
+            + `${panelFriendCount ? `（含其它账号好友 ${panelFriendCount} 个）` : ''}`
+            + `${failed ? `，${failed} 个查询失败` : ''}`
+            + `${pendingCount ? `，还有 ${pendingCount} 个候选待下一轮轮换` : ''}`)
       return true
     } catch (scanError) {
       if (yishuHuanfuFriendShopsAccountId.value === requestedAccountId)
@@ -2830,6 +2882,7 @@ export const useActivityCenterStore = defineStore('activity-center', () => {
     exchangeYishuHuanfuGoods,
     loadYishuHuanfuCatalog,
     loadYishuHuanfuShop,
+    queryYishuHuanfuShopQuote,
     loadYishuHuanfuRecords,
     claimYishuHuanfuCommission,
     yishuHuanfuRecords,

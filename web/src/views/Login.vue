@@ -106,9 +106,10 @@ async function handleSubmit() {
 async function fetchGameVersion() {
   try {
     const res = await api.get('/api/game-version')
-    if (res.data.ok)
+    if (res.data.ok) {
       gameVersion.value = res.data.clientVersion
-    wxGameVersion.value = res.data.wxClientVersion || ''
+      wxGameVersion.value = res.data.wxClientVersion || ''
+    }
   }
   catch (e) {
     console.error('获取游戏版本失败:', e)
@@ -369,7 +370,7 @@ onMounted(() => {
 .logo-kicker {
   color: var(--ui-primary);
   font-size: 10px;
-  font-weight: var(--fw-700);
+  font-weight: 700;
 }
 
 .logo-title {
@@ -405,7 +406,7 @@ onMounted(() => {
   gap: 7px;
   color: var(--ui-ink);
   font-size: 13px;
-  font-weight: var(--fw-600);
+  font-weight: 600;
 }
 
 .form-label > span {
