@@ -15,6 +15,7 @@
 
 | 版本 | 更新序号 | 日期 | 更新内容 | 提交 |
 | --- | --- | --- | --- | --- |
+| v3.39.21 | #288 | 2026-11-26 | 同步上游 `cd30ca7→961f50e` 好友池缓存目录扫描修复 | — |
 | v3.39.20 | #287 | 2026-11-26 | 移除 `core` 死依赖 `qrcode`，修复 `--frozen-lockfile` 构建失败 | — |
 | v3.39.19 | #286 | 2026-11-26 | 同步上游 `27ad69f→cd30ca7`，保留本地定制 | — |
 | v3.39.18 | #285 | 2026-11-26 | 库存图鉴改为「已解锁/总数」并统一图鉴命名 | — |
@@ -273,6 +274,16 @@ flowchart TB
 ```
 
 ## 详细记录
+
+### 2026-11-26 · v3.39.21（#288） · 同步上游 `cd30ca7→961f50e` 好友池缓存目录扫描修复
+
+上游 3 提交（a602031 / a58f09d / 961f50e），仅采纳 a602031 的**好友池缓存目录扫描**修复：`gid-cache.ts` 新增 `listAllKnownFriendGidsCaches()`，`yishuhuanfu.ts` 好友池改为以缓存目录所有 `<accountId>.json` 为准（不再只按 accounts.json 账号列表读），避免面板只挂一个账号时历史账号好友全丢；保留按账号列表读的兼容回退。新增 `core/tests/yishuhuanfu-panel-cache.test.js` 2 条。
+
+**本地化适配**：本地 `runtime-paths.getDataDir()` 不支持上游的 `FARM_DATA_DIR` 环境变量（data 目录固定），上游测试用该变量重定向目录会失败。给 `listAllKnownFriendGidsCaches` 加可选 `dirOverride` 参数供测试隔离，生产调用不传参、行为不变；测试改为传临时目录。
+
+**跳过**：a58f09d / 961f50e 的默认值改动（`scan_interval_minutes` 30→120、`scan_friend_limit` 20→50、出售时间 14:00）——本地用 `yishu_scan_interval_hours`（默认 2h=120min）小时制优先、出售时间锁 23:00、`yishu_scan_friend_limit` 用户的配置值语义不同；且本地 Settings.vue 已重写，上游插入的 `yishu_*_minutes: 120` 三处字段在本地 UI 中不存在。`yishuhuanfu-auto.ts` 的比价明细日志也随默认值改动一并跳过。
+
+验证：core 1156 全绿（原 1154 + 新增 2）。
 
 ### 2026-11-26 · v3.39.20（#287） · 移除 `core` 死依赖 `qrcode`，修复 `--frozen-lockfile` 构建失败
 
