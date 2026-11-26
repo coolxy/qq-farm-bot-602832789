@@ -736,7 +736,7 @@ test('yishuhuanfu commission stays unclaimable when nobody sold into the shop', 
     assert.equal(snapshot.commission.claimable, false);
 });
 
-test('yishuhuanfu scan pools friends from every panel account, dedupes and rotates the window', async () => {
+test('yishuhuanfu scan pools every panel account, dedupes and ignores limit (no truncation)', async () => {
     const quotes = {
         1220537209: { price: '100', quota: '8000', name: '自己' },
         900001: { price: '210', quota: '3000', name: '本号好友' },
@@ -755,13 +755,13 @@ test('yishuhuanfu scan pools friends from every panel account, dedupes and rotat
             { gid: '910003', accountName: 'B号' },
         ],
     });
-    // 上限 4：自己 + 3 个候选，候选池 4 个好友里有一个要等下一轮。
-    const result = await harness.service.scanYishuHuanfuFriendShops({ force: true, limit: 4 });
+    // 传入 limit: 2 也不截断：一轮把整个候选池（自己 + 4 好友）全部纳入。
+    const result = await harness.service.scanYishuHuanfuFriendShops({ force: true, limit: 2 });
     assert.equal(result.panelFriendCount, 3);
     assert.equal(result.friendCount, 4);
-    assert.equal(result.scanned, 4);
-    assert.equal(result.pendingCount, 1);
-    assert.equal(result.limit, 4);
+    assert.equal(result.scanned, 5, 'limit 不再截断，自己 + 4 好友全查');
+    assert.equal(result.pendingCount, 0, '没有轮换窗口，全部候选一轮扫完');
+    assert.equal(result.limit, 5, 'limit 返回实际候选数');
 
     const queried = harness.operateRequest()
         .map(entry => String(types.YshfShopQueryRequest.decode(Buffer.from(entry.body)).params?.shop_gid));
@@ -774,9 +774,37 @@ test('yishuhuanfu scan pools friends from every panel account, dedupes and rotat
     assert.ok(panelRows.every(entry => entry.panelAccount === 'A号' || entry.panelAccount === 'B号'));
     assert.equal(result.shops.find(entry => entry.gid === '900001').via, 'friend');
     assert.equal(result.shops.find(entry => entry.gid === '1220537209').via, 'own');
+});
 
-    // 下一轮从游标接着扫：上一轮没轮到的 GID 必须出现，且自己的铺子仍在。
-    const next = await harness.service.scanYishuHuanfuFriendShops({ force: true, limit: 4 });
-    const allGids = new Set([...result.shops, ...next.shops].map(entry => entry.gid));
-    assert.equal(allGids.size, 5, '两轮轮换应覆盖自己 + 4 个候选好友');
+test('yishuhuanfu scan accumulates quotes across rounds without dropping previously seen friends', async () => {
+    let friendBatch = ['900001'];
+    const quotes = {
+        1220537209: { price: '100', quota: '8000', name: '自己' },
+        900001: { price: '210', quota: '3000', name: '好友甲' },
+        910001: { price: '260', quota: '2000', name: '好友乙' },
+    };
+    const harness = createHarness({
+        shopQuotes: quotes,
+        getAllFriends: async () => ({ game_friends: friendBatch.map(gid => ({ gid, name: quotes[gid].name })) }),
+        getPanelFriendGids: () => [],
+    });
+
+    // 第一轮只有好友甲：自己 + 甲，共 2 个。
+    const first = await harness.service.scanYishuHuanfuFriendShops({ force: true });
+    assert.equal(first.shops.length, 2);
+    assert.deepEqual(new Set(first.shops.map(entry => entry.gid)), new Set(['1220537209', '900001']));
+
+    // 第二轮好友列表换成只有好友乙：甲本轮没扫到，但价格必须在累积池里保留。
+    friendBatch = ['910001'];
+    const second = await harness.service.scanYishuHuanfuFriendShops({ force: true });
+    const gids = new Set(second.shops.map(entry => entry.gid));
+    assert.ok(gids.has('900001'), '上一轮的好友甲不能被本轮覆盖丢失');
+    assert.ok(gids.has('910001'), '本轮新好友乙要进池');
+    assert.ok(gids.has('1220537209'), '自家铺子仍在');
+    assert.equal(second.shops.length, 3, '累积池只增不减');
+    assert.equal(second.heldOver, 1, '有 1 个沿用上次报价');
+
+    // 第三轮仍是空好友列表：累积池里的三家价格继续保持，不会被越清越少。
+    const third = await harness.service.scanYishuHuanfuFriendShops({ force: true });
+    assert.equal(third.shops.length, 3, '连续空列表也不清空已获取的好友价格');
 });

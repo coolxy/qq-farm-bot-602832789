@@ -2667,10 +2667,12 @@ export const useActivityCenterStore = defineStore('activity-center', () => {
       const friendListError = text(payload.friendListError, payload.friend_list_error)
       const panelFriendCount = finiteNumber(first(payload.panelFriendCount, payload.panel_friend_count)) || 0
       const pendingCount = finiteNumber(first(payload.pendingCount, payload.pending_count)) || 0
+      const heldOver = finiteNumber(first(payload.heldOver, payload.held_over)) || 0
       yishuHuanfuFriendScanNote.value = friendListError
-        || (scanned === 0
+        || (scanned === 0 && yishuHuanfuFriendShops.value.length === 0
           ? '没有可查询的铺子'
           : `已扫描 ${yishuHuanfuFriendShops.value.length} 个铺子`
+            + `${heldOver ? `（其中 ${heldOver} 个沿用上次报价）` : ''}`
             + `${panelFriendCount ? `（含其它账号好友 ${panelFriendCount} 个）` : ''}`
             + `${failed ? `，${failed} 个查询失败` : ''}`
             + `${pendingCount ? `，还有 ${pendingCount} 个候选待下一轮轮换` : ''}`)

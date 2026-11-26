@@ -120,8 +120,11 @@ function createYishuHuanfuActivityService(deps: any) {
     let seedClaimedDateKey = '';
     let sharedDateKey = '';
     let friendScanCache: { at: number; data: any } | null = null;
-    // 候选池（本账号好友 + 面板其它账号好友）超过单轮上限时的轮换游标。
-    let friendScanRotation = 0;
+    // 好友报价累积池：gid -> 铺子行情。每轮扫描把新扫到的按 gid 合并进来，
+    // 本轮没扫到 / 查询失败的好友保留上一轮价格，避免「重新比价」把已有价格整批覆盖丢失。
+    // 池归属到当前账号（ownGid），切号后自动清空，防止 A 号好友价格串到 B 号。
+    let friendQuotePool = new Map<string, any>();
+    let friendQuotePoolOwner = '';
     // 背包读取失败时保留原因，随快照一起下发，前端可以显示“余额未知”的具体理由。
     let lastBalanceError = '';
     // 前端轮询很密，同一个超时错误 5 分钟内只记一条，避免把日志刷爆后反而看不到别的信息。
@@ -231,21 +234,12 @@ function createYishuHuanfuActivityService(deps: any) {
     }
 
     /**
-     * 候选池超过本轮上限时的轮换窗口：自己的铺子永远在内，其余按扫描轮次前后滚动，
-     * 几轮下来能把整个候选池覆盖一遍，不会被「永远只扫前 N 个」卡住。
+     * 扫描窗口：好友报价要「全部拿全、不覆盖」，因此这里不再按 limit 截断，
+     * 每轮把整个候选池（自家 + 本号好友 + 面板其它账号好友）都扫一遍。
+     * limit 仅作为兼容字段保留在返回值里，不再限制实际扫描数量。
      */
-    function takeScanWindow(targets: any[], limit: number, hasOwn: boolean): any[] {
-        if (targets.length <= limit) return targets;
-        const ownEntry = hasOwn ? targets[0] : null;
-        const others = hasOwn ? targets.slice(1) : targets.slice();
-        const capacity = Math.max(1, limit - (ownEntry ? 1 : 0));
-        if (others.length <= capacity) return ownEntry ? [ownEntry, ...others] : others;
-        const start = friendScanRotation % others.length;
-        const window: any[] = [];
-        for (let offset = 0; offset < capacity; offset += 1)
-            window.push(others[(start + offset) % others.length]);
-        friendScanRotation = (start + capacity) % others.length;
-        return ownEntry ? [ownEntry, ...window] : window;
+    function takeScanWindow(targets: any[], _limit: number, _hasOwn: boolean): any[] {
+        return targets;
     }
 
     async function operateYshf(requestType: any, payload: any): Promise<any> {
@@ -727,9 +721,17 @@ function createYishuHuanfuActivityService(deps: any) {
                 panelAccount: entry.accountName,
             });
         }
+        // 好友价格要「全部拿全、不覆盖」：不再按 limit 截断，每轮扫整个候选池。
         const slice = takeScanWindow(targets, limit, !!own);
 
-        const shops: any[] = [];
+        // 切号后旧账号的累积价格不再适用，整池丢弃。
+        const poolOwnerKey = own || '';
+        if (friendQuotePoolOwner !== poolOwnerKey) {
+            friendQuotePool = new Map<string, any>();
+            friendQuotePoolOwner = poolOwnerKey;
+        }
+
+        const scannedNow: any[] = [];
         let failed = 0;
         let failureMessage = '';
         for (let start = 0; start < slice.length; start += FRIEND_SCAN_CONCURRENCY) {
@@ -743,7 +745,7 @@ function createYishuHuanfuActivityService(deps: any) {
                     return;
                 }
                 const quotedOwner = result.value.shop;
-                shops.push({
+                const shop = {
                     ...entry,
                     // 其它账号好友在这里没有本地名字：cmd 92 回包自带铺主昵称 / 头像 / 等级，
                     // 用它补齐，界面上就不用只显示一串 GID。
@@ -759,11 +761,21 @@ function createYishuHuanfuActivityService(deps: any) {
                     canSell: result.value.canSell,
                     // 自家铺子不占好友额度：界面显示「不限」，也只能靠 can_sell 判断能不能卖。
                     unlimited: result.value.own === true,
-                });
+                    quotedAt: now,
+                };
+                scannedNow.push(shop);
+                // 按 gid 合并进累积池：本轮查到的覆盖同 gid 旧值；本轮没查到 / 查失败的好友
+                // 保留上一轮价格，整体列表只增不减（直到卖薯成功或切号清空）。
+                friendQuotePool.set(shop.gid, shop);
             });
         }
 
+        // 不做「本轮没返回就删掉」的清理：好友列表每次返回可能有波动，
+        // 删掉会让上一轮扫到的价格又被覆盖丢失。价格池只增不减，
+        // 只在切号 / 卖薯成功时清空（见下方 sellYishuHuanfuSweetPotato）。
+
         // 按游戏界面显示的成交价（基础价 + 加成）排序，而不是只比基础价。
+        const shops = Array.from(friendQuotePool.values());
         shops.sort((left, right) => {
             const priceDiff = BigInt(right.totalPrice) - BigInt(left.totalPrice);
             if (priceDiff !== 0n) return priceDiff > 0n ? 1 : -1;
@@ -771,23 +783,28 @@ function createYishuHuanfuActivityService(deps: any) {
             return quotaDiff === 0n ? 0 : quotaDiff > 0n ? 1 : -1;
         });
 
+        const heldOver = Math.max(0, shops.length - scannedNow.length);
         const data = {
             shops,
             best: shops[0] || null,
             ownShop: shops.find(entry => entry.own) || null,
-            scanned: slice.length,
+            // scanned = 本轮实际查了几个铺子；shops.length 是累积后的总数。
+            scanned: scannedNow.length,
             failed,
+            heldOver,
             // 候选池 = 本账号好友 + 面板里其它账号的已知好友（去重后）。
             friendCount: targets.length - (own ? 1 : 0),
             panelFriendCount: panelCount,
             candidateCount: targets.length - (own ? 1 : 0),
-            // 候选池超过本轮上限时按轮换窗口扫，这里告诉界面还有多少没轮到。
-            pendingCount: Math.max(0, targets.length - (own ? 1 : 0) - slice.filter(entry => !entry.own).length),
-            limit,
+            // 不再有轮换窗口，全部候选都扫到了。
+            pendingCount: 0,
+            // limit 不再截断：返回实际候选数，前端/调用方据此显示「已全部纳入」。
+            limit: targets.length,
             friendListError,
             message: shops.length === 0
                 ? (friendListError || '没有可查询的铺子')
-                : `已扫描 ${shops.length} 个铺子${panelCount ? `（含其它账号好友 ${panelCount} 个）` : ''}，`
+                : `已扫描 ${shops.length} 个铺子${heldOver ? `（其中 ${heldOver} 个沿用上次报价）` : ''}`
+                    + `${panelCount ? `（含其它账号好友 ${panelCount} 个）` : ''}，`
                     + `最高收购价 ${shops[0].totalPrice}`,
             errorMessage: failureMessage,
             cached: false,
@@ -869,6 +886,8 @@ function createYishuHuanfuActivityService(deps: any) {
             const result = reply?.yshf_sell;
             // 成交会改变目标铺子的剩余额度与自己的福气币，比价缓存必须失效。
             friendScanCache = null;
+            // 成交 / 分享会改变价格，累积池里的旧报价一并作废，下轮全量重扫。
+            friendQuotePool = new Map<string, any>();
             const isOwn = targetGid === own;
             const soldCount = result ? int64String(result.count) : count;
             const price = result ? int64String(result.price) : '0';
@@ -1067,6 +1086,8 @@ function createYishuHuanfuActivityService(deps: any) {
             sharedDateKey = getSystemDateKey();
             // 分享暴击会抬高本人铺子收购价，比价里的自己那行要跟着变。
             friendScanCache = null;
+            // 成交 / 分享会改变价格，累积池里的旧报价一并作废，下轮全量重扫。
+            friendQuotePool = new Map<string, any>();
 
             // cmd 98 只是“活动内的分享动作”，官方客户端还会走一次
             // ShareService.CheckCanShare → ReportShare{field_1:28, field_4:2017}，
