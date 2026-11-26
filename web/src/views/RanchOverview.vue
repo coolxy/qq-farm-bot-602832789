@@ -169,8 +169,8 @@ const todayKey = computed(() => {
 const todayExpGained = computed(() => Math.max(0, Number(status.value?.sessionExpGained) || 0))
 const todayOperations = computed(() => ranchTodayOperations(state.value?.operations, state.value?.operationsDate, todayKey.value))
 
-/* ── 今日统计瓦片：金券 / 经验 / 松果 / 便便 四项资源，加 10 项固定动作计数，
-   共 14 项始终展示（没有记录的显示 0）。样式与同一网格里的其它瓦片一致。 ── */
+/* ── 今日统计瓦片：金券 / 经验 / 松果 / 便便 四项资源，加 11 项固定动作计数，
+   共 15 项始终展示（没有记录的显示 0）。样式与同一网格里的其它瓦片一致。 ── */
 const RANCH_TODAY_CURRENCIES = [
   { id: 1007, label: '金券', icon: 'i-carbon-ticket' },
   { id: 1008, label: '松果', icon: 'i-carbon-tree' },
@@ -181,14 +181,15 @@ const RANCH_TODAY_CURRENCIES = [
 const RANCH_TODAY_ACTIONS = [
   { key: 'sell', label: '出售' },
   { key: 'steal', label: '偷取' },
-  { key: 'putMosquito', label: '蚊子' },
   { key: 'feed', label: '喂养' },
+  { key: 'putMosquito', label: '蚊子' },
+  { key: 'produceFriend', label: '帮催产' },
   { key: 'produce', label: '催产' },
+  { key: 'cleanFriend', label: '帮清理' },
+  { key: 'clean', label: '清理' },
   { key: 'harvest', label: '收产物' },
   { key: 'release', label: '出栏' },
-  { key: 'clean', label: '清理' },
-  { key: 'cleanFriend', label: '帮清理' },
-  { key: 'produceFriend', label: '帮催产' },
+  { key: 'claimTasks', label: '任务' },
 ] as const
 
 const currencyStatsMap = computed<Record<string, any>>(() => (state.value?.currencyStats || {}))
@@ -229,7 +230,7 @@ const expTile = computed(() => ({
 
 /**
  * 今日统计瓦片的展示顺序（用户指定）：
- * 金券、经验、松果、便便、出售、偷取、蚊子、喂养、催产、收产物、出栏、清理、帮清理、帮催产。
+ * 金券、经验、松果、便便、出售、偷取、喂养、蚊子、帮催产、催产、帮清理、清理、收产物、出栏、任务。
  *
  * 单独维护这张表而不是依赖 RANCH_TODAY_CURRENCIES / RANCH_TODAY_ACTIONS 的拼接顺序，
  * 这样以后调位置只改这一处。
@@ -241,14 +242,15 @@ const TODAY_TILE_ORDER = [
   'currency-7002',
   'action-sell',
   'action-steal',
-  'action-putMosquito',
   'action-feed',
+  'action-putMosquito',
+  'action-produceFriend',
   'action-produce',
+  'action-cleanFriend',
+  'action-clean',
   'action-harvest',
   'action-release',
-  'action-clean',
-  'action-cleanFriend',
-  'action-produceFriend',
+  'action-claimTasks',
 ]
 
 const todayTiles = computed(() => {

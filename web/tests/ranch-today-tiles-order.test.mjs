@@ -18,7 +18,7 @@ function tileOrder() {
   return [...block[1].matchAll(/'([^']+)'/g)].map(match => match[1])
 }
 
-test('今日统计固定 14 项：金券 → 经验 → 松果 → 便便 → 出售 → 偷取 → 蚊子 → 喂养 → 催产 → 收产物 → 出栏 → 清理 → 帮清理 → 帮催产', () => {
+test('今日统计固定 15 项：金券 → 经验 → 松果 → 便便 → 出售 → 偷取 → 喂养 → 蚊子 → 帮催产 → 催产 → 帮清理 → 清理 → 收产物 → 出栏 → 任务', () => {
   assert.deepEqual(tileOrder(), [
     'currency-1007',
     'today-exp',
@@ -26,14 +26,15 @@ test('今日统计固定 14 项：金券 → 经验 → 松果 → 便便 → �
     'currency-7002',
     'action-sell',
     'action-steal',
-    'action-putMosquito',
     'action-feed',
+    'action-putMosquito',
+    'action-produceFriend',
     'action-produce',
+    'action-cleanFriend',
+    'action-clean',
     'action-harvest',
     'action-release',
-    'action-clean',
-    'action-cleanFriend',
-    'action-produceFriend',
+    'action-claimTasks',
   ])
 })
 
@@ -59,7 +60,7 @@ test('顺序表里的 key 都能被固定瓦片生成出来', () => {
 
   for (const key of tileOrder()) assert.ok(known.has(key), `${key} 要能对应到实际瓦片`)
   assert.ok(currencyIds.length >= 3, '金券/松果/便便三个货币瓦片都要还在')
-  assert.ok(actionKeys.length >= 10, '10 项动作瓦片都要在固定表里')
+  assert.ok(actionKeys.length >= 11, '11 项动作瓦片都要在固定表里')
 })
 
 test('动作 key 与后端 recordAction 的命名一致', () => {
@@ -67,11 +68,13 @@ test('动作 key 与后端 recordAction 的命名一致', () => {
   const statsSource = readFileSync(new URL('../../core/src/services/ranch/stats.ts', import.meta.url), 'utf8')
   assert.match(actionsSource, /recordAction\(action\)/, '统一入口要按动作名记账')
   assert.match(statsSource, /function recordAction\(action: string\)/, '统计模块要按动作名累加')
-  for (const key of ['feed', 'produce', 'harvest', 'release', 'cleanFriend', 'produceFriend'])
+  for (const key of ['feed', 'produce', 'harvest', 'release', 'cleanFriend', 'produceFriend', 'claimTasks'])
     assert.match(source, new RegExp(`key: '${key}', label:`), `缺少动作 ${key}`)
 })
 
-test('今日统计不再展示「任务」瓦片', () => {
-  assert.ok(!tileOrder().includes('action-claimTasks'), '顺序表里不应再有任务')
-  assert.doesNotMatch(source, /key: 'claimTasks', label:/, '固定动作表里不应再有任务')
+test('「任务」瓦片加回，且排在最后一位', () => {
+  const order = tileOrder()
+  assert.ok(order.includes('action-claimTasks'), '顺序表里要有任务')
+  assert.equal(order.at(-1), 'action-claimTasks', '任务要排在最后一位')
+  assert.match(source, /\{ key: 'claimTasks', label: '任务' \}/, '固定动作表里要有任务')
 })
