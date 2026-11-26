@@ -1,10 +1,11 @@
 <script setup lang="ts">
+import type { YishuHuanfuFriendShopDto } from '@/stores/activity-center'
 import { NButton } from 'naive-ui/es/button'
 import { storeToRefs } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import { YishuHuanfuTab } from '@/components/activity/gameplays/yishuhuanfu'
 import { useAccountStore } from '@/stores/account'
-import { useActivityCenterStore, type YishuHuanfuFriendShopDto } from '@/stores/activity-center'
+import { useActivityCenterStore } from '@/stores/activity-center'
 import { useActivityClock } from './useActivityClock'
 
 const emit = defineEmits<{ back: [] }>()
@@ -145,7 +146,8 @@ async function onQueryShop(gid: string) {
   }
 }
 
-async function onSell(payload: { friendGid: string, count: number | null }) {  const id = accountId()
+async function onSell(payload: { friendGid: string, count: number | null }) {
+  const id = accountId()
   if (!id)
     return
   const ok = await activityStore.sellYishuHuanfuSweetPotato(id, payload.friendGid, payload.count)
@@ -395,17 +397,17 @@ async function onClaimCommission() {
   justify-content: space-between;
   gap: 8px;
   padding: 6px 10px;
-  border: 1px solid rgba(201, 95, 102, 0.2);
+  border: 1px solid color-mix(in srgb, var(--ui-danger) 20%, transparent);
   border-radius: 10px;
-  color: #9a4048;
-  background: rgba(250, 233, 234, 0.94);
+  color: var(--ui-danger);
+  background: color-mix(in srgb, var(--ui-danger-soft) 94%, transparent);
   font-size: 11px;
 }
 
 .yshf-view__message.success {
-  border-color: rgba(67, 141, 99, 0.2);
-  color: #2e714b;
-  background: rgba(228, 241, 231, 0.94);
+  border-color: color-mix(in srgb, var(--ui-primary) 20%, transparent);
+  color: var(--ui-primary);
+  background: color-mix(in srgb, var(--ui-primary-soft) 94%, transparent);
 }
 
 .yshf-view__message button {
@@ -419,6 +421,8 @@ async function onClaimCommission() {
 }
 
 @keyframes yshf-spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 </style>

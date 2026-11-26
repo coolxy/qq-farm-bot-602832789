@@ -15,6 +15,7 @@
 
 | 版本 | 更新序号 | 日期 | 更新内容 | 提交 |
 | --- | --- | --- | --- | --- |
+| v3.39.19 | #286 | 2026-11-26 | 同步上游 `27ad69f→cd30ca7`，保留本地定制 | — |
 | v3.39.18 | #285 | 2026-11-26 | 库存图鉴改为「已解锁/总数」并统一图鉴命名 | — |
 | v3.39.17 | #283 | 2026-11-26 | 牧场今日统计去除「任务」项 | — |
 | v3.39.16 | #282 | 2026-11-26 | 牧场今日统计改为指定 15 项，兑换按钮统一，清理以薯换福面板说明 | — |
@@ -271,6 +272,20 @@ flowchart TB
 ```
 
 ## 详细记录
+
+### 2026-11-26 · v3.39.19（#286） · 同步上游 `27ad69f→cd30ca7`，保留本地定制
+
+以 `27ad69f` 为 base（`git rev-list --left-right --count` = 0/8，基线确认无偏差），对上游 8 个提交逐文件三方合并。GitHub 直连报 502，改用 `gh-proxy.org` 镜像拉取，提交 SHA 一致。
+
+**采纳**：
+- `63f4cb5` 好友池读取路径：`services/activity-center/` 下 `require('../models/store')` 指向不存在的目录，异常被 catch 吞掉，面板好友池只剩本账号好友。本地这个文件此前仍是错路径（记忆里 v3.39.2 修的是另一个 `selfGid()` 的 require），本次改成 `../../models/store`。
+- `5834a15` + `cd30ca7` 出售目标重置：移除监听 `activity.shop.gid` 的 watch（快照刷新会把刚选中的好友铺子清空、按钮悄悄变回卖给自己），账号/活动切换由父级 `v-if` 卸载页面完成。
+- `ea6ae4b` 深色模式：`ActivityShell` / `ActivityCenter` / `YishuHuanfuTab` / `YishuHuanfuActivityPage` 的硬编码暖白背景改成 `--ui-surface-solid` 的 `color-mix`，`style.css` 新增 `--yshf-accent` / `--yshf-accent-soft` 浅深两套色值。冲突只在 `style.css` 的主题变量块，按「本地 8px 圆角与阴影优先 + 叠加新增色变量」手解。
+- 新增 `web/tests/yishuhuanfu-target-gid.test.mjs` 3 条（编译真实 SFC 的 setup 执行），本地全通过；顺手清掉上游文件里多余的 eslint-disable 与风格错误。
+
+**跳过**：`cec615d` 把默认出售时间改成 14:00（本地按用户要求锁 23:00，Settings.vue 的三处同款改动一起跳过）；上游 `web/dist` / `core/dist` 产物（本地构建生成）；`stores/activity-center.ts` 的净变化只是一段注释。
+
+验证：core **1154 全绿**、web **395 全绿**、`pnpm typecheck` 通过、改动文件 eslint 零告警、`git diff --check` 通过。本地定制逐项核对仍在：出售时间 23:00、页面滚动修复、兑换按钮贴底、牧场统计 14 项、库存图鉴显示。
 
 ### 2026-11-26 · v3.39.18（#285） · 库存图鉴改为「已解锁/总数」并统一图鉴命名
 
