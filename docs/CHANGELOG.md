@@ -15,6 +15,7 @@
 
 | 版本 | 更新序号 | 日期 | 更新内容 | 提交 |
 | --- | --- | --- | --- | --- |
+| v3.39.20 | #287 | 2026-11-26 | 移除 `core` 死依赖 `qrcode`，修复 `--frozen-lockfile` 构建失败 | — |
 | v3.39.19 | #286 | 2026-11-26 | 同步上游 `27ad69f→cd30ca7`，保留本地定制 | — |
 | v3.39.18 | #285 | 2026-11-26 | 库存图鉴改为「已解锁/总数」并统一图鉴命名 | — |
 | v3.39.17 | #283 | 2026-11-26 | 牧场今日统计去除「任务」项 | — |
@@ -272,6 +273,14 @@ flowchart TB
 ```
 
 ## 详细记录
+
+### 2026-11-26 · v3.39.20（#287） · 移除 `core` 死依赖 `qrcode`，修复 `--frozen-lockfile` 构建失败
+
+NAS 端 `docker compose up -d --build` 在 `pnpm -C core install --prod --frozen-lockfile` 步骤报 `ERR_PNPM_OUTDATED_LOCKFILE`：`core/package.json` 声明了 `qrcode@^1.5.4`，但 `pnpm-lock.yaml` 无对应条目。
+
+排查确认 `qrcode` 为**死依赖**：全仓库（含 `core/src`、`web`、Dockerfile、compose）无任何 `import/require` 引用，本地也从未安装。该依赖在 v3.39.9 同步上游时被加入 `package.json`，但锁文件未同步，后续也无代码使用。
+
+修复：从 `core/package.json` 移除 `qrcode`，`package.json` 与锁文件重新对齐。验证 `pnpm -C core install --prod --frozen-lockfile` 通过，`pnpm build:core` 编译通过，core 测试 1154 条全绿。
 
 ### 2026-11-26 · v3.39.19（#286） · 同步上游 `27ad69f→cd30ca7`，保留本地定制
 
