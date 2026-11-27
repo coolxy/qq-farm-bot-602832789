@@ -78,6 +78,13 @@ export interface AutomationConfig extends RanchAutomationConfig {
    * 卖太早好友还没暴击、价格排后面；卖太晚高价铺子的额度又可能被别人吃满。
    */
   yishu_sell_after_time: string;
+  /**
+   * 高价立即卖出：比价扫到好友铺子成交价达到阈值时，不受「出售时间」和
+   * 「至少比自家高」限制，直接卖给最高价的那家。关掉后完全按原闸门走。
+   */
+  yishu_quick_sell_enabled: boolean;
+  /** 触发立即卖出的成交价阈值（福气币/个），默认 500。 */
+  yishu_quick_sell_price: number;
 
   // ---- 宠物（自动喂狗粮） ----
   pet_feed_dog_food: boolean;

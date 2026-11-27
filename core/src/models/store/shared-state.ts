@@ -96,6 +96,10 @@ const DEFAULT_ACCOUNT_CONFIG: AccountConfig = {
         // 默认等到 23:00 再卖：此时好友当天基本都分享过、暴击加成已经加上。
         // 留空表示不限时段（旧行为），填 "HH:MM" 就是过了这个点才卖。
         yishu_sell_after_time: '23:00',
+        // 高价立即卖出默认关：只有扫到的成交价 >= 阈值才绕过上面的出售时间闸门，
+        // 避免默认行为突然变成「白天一有高价就卖」。
+        yishu_quick_sell_enabled: false,
+        yishu_quick_sell_price: 500,
         farm: true,
         farm_harvest_tiangong: true,
         farm_push: true,
@@ -487,6 +491,7 @@ const YISHU_NUMERIC_RANGES: Record<string, [number, number]> = {
     yishu_sell_min_count: [1, 10000],
     yishu_sell_min_gain: [0, 100000],
     yishu_sell_keep_count: [0, 100000],
+    yishu_quick_sell_price: [1, 1000000],
 };
 
 /**

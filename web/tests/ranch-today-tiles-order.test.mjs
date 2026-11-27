@@ -42,12 +42,21 @@ test('蚊子瓦片标签去掉「放」字，与其它动作保持两字口径',
   assert.ok(!source.includes('放蚊子'), '概览页不应再出现「放蚊子」标签')
 })
 
-test('todayTiles 按顺序表排序，只展示固定 14 项', () => {
+test('todayTiles 按顺序表排序，固定 14 项在前、其他数据追加末尾', () => {
   assert.match(source, /const todayTiles = computed\(\(\) => \{/, 'todayTiles 必须是带排序的实现，不能退回直接拼接')
   assert.match(source, /TODAY_TILE_ORDER\.indexOf\(key\)/, '要用顺序表取 rank')
   assert.match(source, /index < 0 \? TODAY_TILE_ORDER\.length : index/, '不在表里的 key 排到最后')
   assert.match(source, /sort\(\(a, b\) => rankOf\(a\.key\) - rankOf\(b\.key\)\)/, '按 rank 排序')
-  assert.doesNotMatch(source, /otherActionTiles/, '不再展示表外动作，固定 14 项始终可见')
+  assert.match(source, /\.\.\.otherActionTiles\.value/, '表外动作要追加进 todayTiles')
+})
+
+test('「其他数据」有记录才展示，今日无数据时隐藏', () => {
+  // operationEntries 只保留 count > 0 的项，otherActionTiles 基于它生成：
+  // 当天没有任何表外动作记录时这一组为空，网格里不会出现一排 0。
+  assert.match(source, /const operationEntries = computed\(\(\) => Object\.entries\(todayOperations\.value\)\.filter\(\(\[, count\]\) => Number\(count\) > 0\)\)/, '其他数据只保留 count > 0 的记录')
+  assert.match(source, /const otherActionTiles = computed\(\(\) => operationEntries\.value/, '其他数据基于 operationEntries（已过滤 0）生成')
+  assert.match(source, /\.filter\(\(\[key\]\) => !RANCH_TODAY_ACTIONS\.some\(item => item\.key === key\)\)/, '已在固定 14 项里的动作不重复出现在其他数据')
+  assert.match(source, /ranchActionLabels\[key\] \|\| key/, '其他数据用动作中文名做标签')
 })
 
 test('顺序表里的 key 都能被固定瓦片生成出来', () => {

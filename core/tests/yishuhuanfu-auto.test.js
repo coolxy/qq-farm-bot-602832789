@@ -608,3 +608,100 @@ test('提成按配置的间隔节流：首次领，间隔内不重复领', async
     assert.equal(harness.calls.filter(entry => entry[0] === 'claimCommission').length, 1);
     assert.ok(harness.logs.some(entry => entry.message.includes('距上次领取不足 6 小时')));
 });
+
+// ---------- 高价立即卖出 ----------
+// 未到出售时间（北京 22:00），但开了高价直卖且扫到 >= 阈值的成交价，应当立即卖。
+test('未到出售时间但扫到高价时立即卖出，并忽略最小价差', async () => {
+    const harness = createHarness({
+        nowSec: BEIJING_2200_SEC,
+        snapshot: makeSnapshot({ sweetPotato: { balance: '6', balanceKnown: true } }),
+        // 自家 144，好友 520；默认 minGain=1 时 520 远高于 144+1，但这里特意把
+        // minGain 设成 1000 来证明高价直卖确实绕过了「至少比自家高」的限制。
+        shops: [
+            makeShop({ gid: '9', name: '高价', totalPrice: '520', quota: '100' }),
+        ],
+    });
+    await harness.automation.runYishuAutomation({
+        ...ALL_ON,
+        yishu_sell_after_time: '23:00',
+        yishu_sell_min_gain: 1000,
+        yishu_quick_sell_enabled: true,
+        yishu_quick_sell_price: 500,
+    });
+
+    assert.equal(harness.sells().length, 1);
+    assert.equal(harness.sells()[0][1], '9');
+    assert.ok(harness.logs.some(entry => entry.message.includes('触发高价立即卖出')));
+    const summary = harness.logs.find(entry => entry.message === '以薯换福自动本轮开始');
+    assert.equal(summary.meta.sellGateOpen, false);
+    assert.equal(summary.meta.quickSellEnabled, true);
+    assert.equal(summary.meta.quickSellPrice, 500);
+});
+
+test('开了高价直卖但扫到的价格未达阈值时，仍按出售时间闸门跳过', async () => {
+    const harness = createHarness({
+        nowSec: BEIJING_2200_SEC,
+        snapshot: makeSnapshot({ sweetPotato: { balance: '6', balanceKnown: true } }),
+        shops: [makeShop({ totalPrice: '320', quota: '100' })],
+    });
+    await harness.automation.runYishuAutomation({
+        ...ALL_ON,
+        yishu_sell_after_time: '23:00',
+        yishu_quick_sell_enabled: true,
+        yishu_quick_sell_price: 500,
+    });
+
+    assert.equal(harness.sells().length, 0);
+    assert.ok(harness.logs.some(entry => entry.message.includes('还没到开始售卖时间 23:00')));
+});
+
+test('高价直卖阈值可配置：门槛较低时按新阈值触发', async () => {
+    const harness = createHarness({
+        nowSec: BEIJING_2200_SEC,
+        snapshot: makeSnapshot({ sweetPotato: { balance: '6', balanceKnown: true } }),
+        shops: [makeShop({ totalPrice: '380', quota: '100' })],
+    });
+    await harness.automation.runYishuAutomation({
+        ...ALL_ON,
+        yishu_sell_after_time: '23:00',
+        yishu_quick_sell_enabled: true,
+        yishu_quick_sell_price: 350,
+    });
+
+    assert.equal(harness.sells().length, 1);
+    assert.ok(harness.logs.some(entry => entry.message.includes('扫到好友铺子最高成交价 380 >= 350')));
+});
+
+test('只开卖薯+高价直卖且未到点时也会读状态并扫价（不提前短路）', async () => {
+    const harness = createHarness({
+        nowSec: BEIJING_2200_SEC,
+        snapshot: makeSnapshot({ sweetPotato: { balance: '6', balanceKnown: true } }),
+        shops: [makeShop({ totalPrice: '700', quota: '100' })],
+    });
+    await harness.automation.runYishuAutomation({
+        yishu_auto_sell: true,
+        yishu_sell_after_time: '23:00',
+        yishu_quick_sell_enabled: true,
+        yishu_quick_sell_price: 500,
+    });
+
+    assert.equal(harness.calls.filter(entry => entry[0] === 'getActivity').length, 1);
+    assert.equal(harness.calls.filter(entry => entry[0] === 'scanFriends').length, 1);
+    assert.equal(harness.sells().length, 1);
+});
+
+test('默认不enable高价直卖时行为不变（未到点仍不扫不卖）', async () => {
+    const harness = createHarness({
+        nowSec: BEIJING_2200_SEC,
+        snapshot: makeSnapshot({ sweetPotato: { balance: '6', balanceKnown: true } }),
+        shops: [makeShop({ totalPrice: '9999', quota: '100' })],
+    });
+    await harness.automation.runYishuAutomation({
+        ...ALL_ON,
+        yishu_sell_after_time: '23:00',
+    });
+
+    // ALL_ON 里领种子/分享/提成也开着，所以会读状态，但卖薯被闸门挡住。
+    assert.equal(harness.sells().length, 0);
+    assert.equal(harness.calls.filter(entry => entry[0] === 'scanFriends').length, 0);
+});

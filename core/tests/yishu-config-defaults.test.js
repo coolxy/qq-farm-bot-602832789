@@ -28,6 +28,8 @@ test('空配置取新面板的默认值', () => {
     assert.equal(a.yishu_sell_min_gain, 1);
     assert.equal(a.yishu_sell_keep_count, 0);
     assert.equal(a.yishu_sell_after_time, '23:00');
+    assert.equal(a.yishu_quick_sell_enabled, false);
+    assert.equal(a.yishu_quick_sell_price, 500);
     assert.equal(a.yishu_sell_fallback_own, true);
     assert.equal(a.yishu_scan_friend_limit, 20);
     assert.equal(a.yishu_sell_min_count, 1);
@@ -59,6 +61,7 @@ test('数值项超界被夹回区间，不会把间隔算成 0', () => {
             yishu_sell_min_gain: 'abc',
             yishu_sell_keep_count: -5,
             yishu_scan_friend_limit: 1000,
+            yishu_quick_sell_price: 99999999,
         },
     });
     assert.equal(a.yishu_commission_interval_hours, 48);
@@ -67,6 +70,7 @@ test('数值项超界被夹回区间，不会把间隔算成 0', () => {
     assert.equal(a.yishu_sell_min_gain, 0);
     assert.equal(a.yishu_sell_keep_count, 0);
     assert.equal(a.yishu_scan_friend_limit, 200);
+    assert.equal(a.yishu_quick_sell_price, 1000000);
 });
 
 test('默认配置对象本身与归一化结果一致（防止只改一处）', () => {
@@ -90,6 +94,8 @@ test('保存快照后出售时间仍是字符串，数值项仍是数字（不�
             yishu_sell_keep_count: 7,
             yishu_scan_friend_limit: 30,
             yishu_sell_min_count: 2,
+            yishu_quick_sell_enabled: true,
+            yishu_quick_sell_price: 650,
             yishu_enabled: false,
         },
     }, { persist: false, accountId: '' });
@@ -102,6 +108,8 @@ test('保存快照后出售时间仍是字符串，数值项仍是数字（不�
     assert.equal(a.yishu_sell_keep_count, 7);
     assert.equal(a.yishu_scan_friend_limit, 30);
     assert.equal(a.yishu_sell_min_count, 2);
+    assert.equal(a.yishu_quick_sell_enabled, true);
+    assert.equal(a.yishu_quick_sell_price, 650);
     assert.equal(a.yishu_enabled, false);
 });
 

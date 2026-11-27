@@ -105,6 +105,17 @@ const enabled = computed(() => automation.value.automation.yishu_enabled !== fal
             min="0"
             max="100000"
           />
+          <div class="automation-setting-item sm:col-span-2">
+            <BaseSwitch v-model="automation.automation.yishu_quick_sell_enabled" label="扫到高价时立即卖出（忽略出售时间）" />
+          </div>
+          <BaseInput
+            v-if="automation.automation.yishu_quick_sell_enabled"
+            v-model.number="automation.automation.yishu_quick_sell_price"
+            label="立即卖出成交价门槛 (福气币/个)"
+            type="number"
+            min="1"
+            max="1000000"
+          />
         </div>
       </div>
 
@@ -140,6 +151,10 @@ const enabled = computed(() => automation.value.automation.yishu_enabled !== fal
     <p class="text-xs text-gray-500 dark:text-gray-400">
       「出售时间」不是精准卡点：选了 23:00，就是过了 23:00 之后每一轮自动任务（10 分钟一次）都按同样的逻辑卖，
       等晚一点的好处是好友当天基本都分享过、暴击加成已经加上、价格排在前面；代价是高价铺子的额度可能被别人先吃满，届时会按价格往下找。留空表示不限时段。
+    </p>
+    <p class="text-xs text-gray-500 dark:text-gray-400">
+      打开「扫到高价时立即卖出」后，只要比价扫到某家好友铺子的成交价（基础价 + 暴击）达到设定的门槛（默认 500），
+      就无视「出售时间」和「至少比自家高」的限制，当场按成交价从高到低卖；没扫到高价则仍按出售时间闸门走。
     </p>
   </section>
 </template>

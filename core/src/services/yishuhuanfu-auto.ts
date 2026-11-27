@@ -46,6 +46,8 @@ const DEFAULT_COMMISSION_INTERVAL_HOURS = 6;
 const DEFAULT_SELL_MIN_GAIN = 1;
 const DEFAULT_SELL_KEEP_COUNT = 0;
 const DEFAULT_SELL_MIN_COUNT = 1;
+/** 高价立即卖出的默认成交价阈值（福气币/个）。 */
+const DEFAULT_QUICK_SELL_PRICE = 500;
 /** 自动任务沿用旧余额的上限：与 activity-center 的 AUTO_BALANCE_STALE_MAX_MS 对齐。 */
 const YISHU_BALANCE_STALE_MAX_MS = 60 * 60 * 1000;
 
@@ -192,6 +194,10 @@ function createYishuAutomation(deps: {
         keepCount: number;
         minGain: number;
         fallbackOwn: boolean;
+        sellGateOpen: boolean;
+        sellGateSkipText: string;
+        quickSellEnabled: boolean;
+        quickSellPrice: number;
     }): Promise<void> {
         const bag = readSweetPotatoCount(snapshot);
         if (!bag.known) {
@@ -257,10 +263,34 @@ function createYishuAutomation(deps: {
         if (/^\d+$/.test(ownPriceText)) ownPrice = BigInt(ownPriceText);
         const minGain = BigInt(Math.max(0, options.minGain));
 
+        // 高价立即卖出：扫到任意好友铺子的成交价 >= 阈值时，无视「出售时间」闸门和
+        // 「至少比自家高 N 个」的价差限制，按成交价降序直接卖。没有扫到高价就维持
+        // 原来的时间闸门 + minGain 逻辑，不改变默认行为。
+        const quickSellThreshold = BigInt(Math.max(1, options.quickSellPrice));
+        const bestFriendPrice = shops.reduce((best: bigint, shop: any) => {
+            if (shop.own) return best;
+            const price = /^\d+$/.test(String(shop.totalPrice ?? '')) ? BigInt(shop.totalPrice) : 0n;
+            return price > best ? price : best;
+        }, 0n);
+        const quickSellHit = options.quickSellEnabled && bestFriendPrice >= quickSellThreshold;
+
+        if (!options.sellGateOpen && !quickSellHit) {
+            skip('sell', options.sellGateSkipText);
+            return;
+        }
+        if (quickSellHit) {
+            done('sell', `扫到好友铺子最高成交价 ${bestFriendPrice} >= ${quickSellThreshold}，触发高价立即卖出（忽略出售时间与最小价差）`);
+        }
+
         let filteredByGain = 0;
         const candidates = shops.filter((shop: any) => {
             // 自家铺子只由 fallbackOwn 决定：不存在「比自己高」的比较。
             if (shop.own) return options.fallbackOwn;
+            // 高价直卖命中时，候选只看是否达到阈值，绕过 minGain 比较。
+            if (quickSellHit) {
+                const price = /^\d+$/.test(String(shop.totalPrice ?? '')) ? BigInt(shop.totalPrice) : 0n;
+                return price >= quickSellThreshold;
+            }
             if (ownPrice !== null && minGain > 0n) {
                 const price = /^\d+$/.test(String(shop.totalPrice ?? '')) ? BigInt(shop.totalPrice) : 0n;
                 if (price < ownPrice + minGain) {
@@ -343,9 +373,13 @@ function createYishuAutomation(deps: {
         const sellGateOpen = sellAfterMinutes === null
             || currentMinutesOfDay(getServerTimeSec()) >= sellAfterMinutes;
         const sellGateSkipText = `还没到开始售卖时间 ${sellAfterLabel}，到点后每轮都会卖`;
+        // 高价立即卖出：开了之后即使没到出售时间，也要读状态并扫好友铺子，
+        // 只有扫到成交价 >= 阈值才卖，否则仍按时间闸门跳过。
+        const quickSellEnabled = automation.yishu_quick_sell_enabled === true;
+        const quickSellPrice = toInt(automation.yishu_quick_sell_price, DEFAULT_QUICK_SELL_PRICE, 1, 1000000);
 
-        // 只开了卖薯、又还没到点：连活动状态都不用读，直接按天记一行跳过。
-        if (sellEnabled && !sellGateOpen && !claimSeedEnabled && !shareEnabled && !commissionEnabled) {
+        // 只开了卖薯、又还没到点、又没开高价直卖：连活动状态都不用读，直接按天记一行跳过。
+        if (sellEnabled && !sellGateOpen && !quickSellEnabled && !claimSeedEnabled && !shareEnabled && !commissionEnabled) {
             skip('sell', sellGateSkipText);
             return;
         }
@@ -390,6 +424,8 @@ function createYishuAutomation(deps: {
             // 保留量与最小价差同样是「为什么没卖」的常见原因，一并写进摘要。
             sellKeep: toInt(automation.yishu_sell_keep_count, DEFAULT_SELL_KEEP_COUNT, 0, 100000),
             sellMinGain: toInt(automation.yishu_sell_min_gain, DEFAULT_SELL_MIN_GAIN, 0, 100000),
+            quickSellEnabled,
+            quickSellPrice,
             scanEnabled: automation.yishu_scan_enabled !== false,
         });
 
@@ -440,8 +476,9 @@ function createYishuAutomation(deps: {
             }
         }
 
-        if (sellEnabled && !sellGateOpen) {
+        if (sellEnabled && !sellGateOpen && !quickSellEnabled) {
             // 到点前不卖，其余（领种子 / 分享 / 收提成）照常，不影响当天的准备动作。
+            // 开了高价直卖时不能在这里拦：得先扫好友铺子才知道够不够阈值。
             skip('sell', sellGateSkipText);
         }
         else if (sellEnabled) {
@@ -453,6 +490,10 @@ function createYishuAutomation(deps: {
                 keepCount: toInt(automation.yishu_sell_keep_count, DEFAULT_SELL_KEEP_COUNT, 0, 100000),
                 minGain: toInt(automation.yishu_sell_min_gain, DEFAULT_SELL_MIN_GAIN, 0, 100000),
                 fallbackOwn: automation.yishu_sell_fallback_own !== false,
+                sellGateOpen,
+                sellGateSkipText,
+                quickSellEnabled,
+                quickSellPrice,
             });
         }
 

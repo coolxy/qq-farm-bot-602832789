@@ -108,6 +108,10 @@ export interface AutomationConfig {
   yishu_sell_keep_count?: number
   /** 到点之后才开始卖薯（"HH:MM"，空串 = 不限时段） */
   yishu_sell_after_time?: string
+  /** 高价立即卖出：扫到成交价 >= 阈值时忽略出售时间闸门直接卖。 */
+  yishu_quick_sell_enabled?: boolean
+  /** 触发高价立即卖出的成交价阈值（福气币/个），默认 500。 */
+  yishu_quick_sell_price?: number
   // 七夕
   qixi_dew_use?: boolean
   qixi_bridge_build?: boolean

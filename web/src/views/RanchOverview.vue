@@ -12,7 +12,7 @@ import { getPlatformLabel, useAccountStore } from '@/stores/account'
 import { useRanchStore } from '@/stores/ranch'
 import { useStatusStore } from '@/stores/status'
 import { formatCouponAmount, formatGoldAmount } from '@/utils/number-format'
-import { ranchActionIcons, ranchTodayOperations } from '@/utils/ranch-display'
+import { ranchActionIcons, ranchActionLabels, ranchTodayOperations } from '@/utils/ranch-display'
 
 const accountStore = useAccountStore()
 const { currentAccountId, currentAccount } = storeToRefs(accountStore)
@@ -168,9 +168,13 @@ const todayKey = computed(() => {
 
 const todayExpGained = computed(() => Math.max(0, Number(status.value?.sessionExpGained) || 0))
 const todayOperations = computed(() => ranchTodayOperations(state.value?.operations, state.value?.operationsDate, todayKey.value))
+// 「其他数据」：固定 14 项之外、当天确实有记录的动作。只保留 count > 0 的项，
+// 今日没有任何记录时这一组不渲染，避免一排 0 把面板撑满。
+const operationEntries = computed(() => Object.entries(todayOperations.value).filter(([, count]) => Number(count) > 0))
 
 /* ── 今日统计瓦片：金券 / 经验 / 松果 / 便便 四项资源，加 10 项固定动作计数，
-   共 14 项始终展示（没有记录的显示 0）。样式与同一网格里的其它瓦片一致。 ── */
+   共 14 项始终展示（没有记录的显示 0）；此外把当天有记录的表外动作作为「其他数据」
+   追加在末尾，无记录时不渲染。样式与同一网格里的其它瓦片一致。 ── */
 const RANCH_TODAY_CURRENCIES = [
   { id: 1007, label: '金券', icon: 'i-carbon-ticket' },
   { id: 1008, label: '松果', icon: 'i-carbon-tree' },
@@ -219,6 +223,19 @@ const fixedActionTiles = computed(() => RANCH_TODAY_ACTIONS.map(({ key, label })
   title: label,
 })))
 
+// 「其他数据」瓦片：表外动作有记录才出现（operationEntries 已按 count > 0 过滤），
+// key 仍用 action-<key>，排序时自然落到 TODAY_TILE_ORDER 末尾。
+const otherActionTiles = computed(() => operationEntries.value
+  .filter(([key]) => !RANCH_TODAY_ACTIONS.some(item => item.key === key))
+  .map(([key, val]) => ({
+    key: `action-${key}`,
+    label: ranchActionLabels[key] || key,
+    image: '',
+    icon: ranchActionIcons[key] || 'i-carbon-chart-column',
+    value: String(val),
+    title: ranchActionLabels[key] || key,
+  })))
+
 const expTile = computed(() => ({
   key: 'today-exp',
   label: '经验',
@@ -233,7 +250,8 @@ const expTile = computed(() => ({
  * 金券、经验、松果、便便、出售、偷取、喂养、蚊子、帮催产、催产、帮清理、清理、收产物、任务。
  *
  * 单独维护这张表而不是依赖 RANCH_TODAY_CURRENCIES / RANCH_TODAY_ACTIONS 的拼接顺序，
- * 这样以后调位置只改这一处。
+ * 这样以后调位置只改这一处。表里没列到的动作（即「其他数据」）自动排在末尾，
+ * 且只在当天有记录时才出现。
  */
 const TODAY_TILE_ORDER = [
   'currency-1007',
@@ -253,7 +271,7 @@ const TODAY_TILE_ORDER = [
 ]
 
 const todayTiles = computed(() => {
-  const tiles = [expTile.value, ...todayCurrencyTiles.value, ...fixedActionTiles.value]
+  const tiles = [expTile.value, ...todayCurrencyTiles.value, ...fixedActionTiles.value, ...otherActionTiles.value]
   const rankOf = (key: string): number => {
     const index = TODAY_TILE_ORDER.indexOf(key)
     return index < 0 ? TODAY_TILE_ORDER.length : index

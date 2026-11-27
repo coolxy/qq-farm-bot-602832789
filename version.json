@@ -1,12 +1,20 @@
 {
   "major": 3,
   "minor": 39,
-  "patch": 25,
-  "build": 291,
-  "version": "3.39.25",
-  "updatedAt": "2026-11-27T03:42:51.946Z",
+  "patch": 26,
+  "build": 292,
+  "version": "3.39.26",
+  "updatedAt": "2026-11-27T04:09:09.492Z",
   "lastCommit": "—",
   "history": [
+    {
+      "version": "3.39.26",
+      "build": 292,
+      "date": "2026-11-27",
+      "summary": "恢复牧场今日统计「其他数据」（无数据隐藏），以薯换福新高价立即卖出开关",
+      "commit": "—",
+      "type": "patch"
+    },
     {
       "version": "3.39.25",
       "build": 291,

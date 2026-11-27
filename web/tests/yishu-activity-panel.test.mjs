@@ -19,6 +19,8 @@ const YISHU_KEYS = [
   'yishu_scan_interval_hours',
   'yishu_auto_sell',
   'yishu_sell_after_time',
+  'yishu_quick_sell_enabled',
+  'yishu_quick_sell_price',
   'yishu_sell_min_gain',
   'yishu_sell_keep_count',
   'yishu_scan_friend_limit',
