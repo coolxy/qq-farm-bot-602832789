@@ -1,12 +1,20 @@
 {
   "major": 3,
   "minor": 39,
-  "patch": 23,
-  "build": 290,
-  "version": "3.39.23",
-  "updatedAt": "2026-11-26T16:58:07.266Z",
+  "patch": 25,
+  "build": 291,
+  "version": "3.39.25",
+  "updatedAt": "2026-11-27T03:42:51.946Z",
   "lastCommit": "—",
   "history": [
+    {
+      "version": "3.39.25",
+      "build": 291,
+      "date": "2026-11-27",
+      "summary": "牧场今日统计去除「出栏」（放生）瓦片",
+      "commit": "—",
+      "type": "patch"
+    },
     {
       "version": "3.39.23",
       "build": 290,
