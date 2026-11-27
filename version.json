@@ -1,12 +1,20 @@
 {
   "major": 3,
   "minor": 39,
-  "patch": 27,
-  "build": 293,
-  "version": "3.39.27",
-  "updatedAt": "2026-11-27T04:17:20.662Z",
+  "patch": 28,
+  "build": 295,
+  "version": "3.39.28",
+  "updatedAt": "2026-11-27T10:04:52.369Z",
   "lastCommit": "—",
   "history": [
+    {
+      "version": "3.39.28",
+      "build": 295,
+      "date": "2026-11-27",
+      "summary": "更新助手拉取改 HTTP/1.1 + 重试，失败原因按日志点名",
+      "commit": "—",
+      "type": "patch"
+    },
     {
       "version": "3.39.27",
       "build": 293,

@@ -15,6 +15,7 @@
 
 | 版本 | 更新序号 | 日期 | 更新内容 | 提交 |
 | --- | --- | --- | --- | --- |
+| v3.39.28 | #295 | 2026-11-27 | 更新助手拉取改 HTTP/1.1 + 重试，失败原因按日志点名 | — |
 | v3.39.27 | #293 | 2026-11-27 | 移除侧栏品牌区关闭叉，修复牧场英文副标题换行导致的高度不一致 | — |
 | v3.39.26 | #292 | 2026-11-27 | 恢复牧场今日统计「其他数据」（无数据隐藏），以薯换福新高价立即卖出开关 | — |
 | v3.39.25 | #291 | 2026-11-27 | 牧场今日统计去除「出栏」（放生）瓦片 | — |
@@ -279,6 +280,20 @@ flowchart TB
 ```
 
 ## 详细记录
+
+### 2026-11-27 · v3.39.28（#295） · 更新助手拉取改 HTTP/1.1 + 重试，失败原因按日志点名
+
+NAS 上一键更新报 `fatal: unable to access 'https://github.com/602832789/qq-farm-bot.git/': OpenSSL SSL_read: SSL_ERROR_SYSCALL, errno 0`。服务没受影响（助手在 pull 阶段就退出，不会重建容器），但一次网络抖动就让整次更新作废，且面板只给一句「常见原因是本地有未提交改动……」，与真实原因无关。
+
+`scripts/docker-update-agent.sh` 三处改动：
+
+- **强制 HTTP/1.1 + 低速断连**：`GIT_NET_OPTS="-c http.version=HTTP/1.1 -c http.lowSpeedLimit=1024 -c http.lowSpeedTime=30"`。`SSL_ERROR_SYSCALL` 的形态是 TCP 还连着、TLS 记录被中间设备静默丢掉，HTTP/2 的多路复用长连接在部分代理 / NAT / 运营商下更容易被掐；低速断连则把「假死」变成可重试的失败，不再挂在半死连接上干等。
+- **拉取重试**：`run_pull` 改为最多 `UPDATE_PULL_ATTEMPTS` 次（默认 3），第 n 次失败后等 `n × UPDATE_PULL_RETRY_DELAY` 秒（默认 5）。成功后记一行「第 N 次拉取成功」。`set -u` 下也保持幂等：次数/间隔非法一律回落默认值。
+- **失败原因按日志点名**：新增 `pull_failure_hint`，读日志尾部按优先级判定——fast-forward 失败（本地改动/分叉）→ 凭据（`UPDATE_GIT_TOKEN`）→ SSL/TLS → DNS/出网，都不匹配才回落原来那句泛化文案。SSL 分支刻意排在 `unable to access` 之前，因为 TLS 报错行本身就含这个串。
+
+测试 `web/tests/docker-update-agent.test.mjs`：失败用例改断「本地有未提交改动」；新增两条真跑用例——前两次 `SSL_ERROR_SYSCALL` 第三次成功（断言正好试到第 3 次、日志留痕「第 3 次拉取成功」）、SSL 一直失败时作业里写的是网络原因而非本地改动；静态闸门补 `http.version=HTTP/1.1`、`PULL_MAX_ATTEMPTS`、`pull_failure_hint` 三条。web 401 全绿。
+
+注意：本次改动要先有一次成功的 pull 才会落到 NAS 上——NAS 上的旧脚本会用旧参数完成这次更新，之后的重试逻辑才生效。
 
 ### 2026-11-27 · v3.39.27（#293） · 移除侧栏品牌区关闭叉，修复牧场英文副标题换行导致的高度不一致
 
