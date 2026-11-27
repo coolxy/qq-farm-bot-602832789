@@ -95,6 +95,19 @@ test('侧栏保留农场 / 牧场分段开关，导航随场景整套替换', ()
   assert.match(layout, /path\.startsWith\('\/ranch'\) \? 'ranch' : 'farm'/)
 })
 
+test('品牌区不再有独立关闭叉，抽屉仍可经遮罩 / ESC / 导航项关闭', () => {
+  assert.doesNotMatch(sidebar, /farm-brand-close|i-carbon-close/)
+  assert.match(layout, /class="farm-drawer-overlay"/)
+  assert.match(sidebar, /@keydown\.esc="appStore\.closeSidebar"/)
+  assert.match(sidebar, /farm-nav-item[\s\S]{0,200}@click="appStore\.closeSidebar"/)
+})
+
+test('场景英文副标题不换行，农场与牧场品牌区高度一致', () => {
+  assert.match(sidebar, /\.farm-brand-caption\s*\{[\s\S]*?white-space:\s*nowrap/)
+  assert.match(sceneStore, /QQ FARM ASSISTANT/)
+  assert.match(sceneStore, /QQ RANCH ASSISTANT/)
+})
+
 test('场景偏好按账号保存，且不发请求', () => {
   assert.match(sceneStore, /useStorage<Record<string, GameScene>>\(SCENE_KEY, \{\}\)/)
   assert.match(sceneStore, /function select\(value: GameScene\)/)

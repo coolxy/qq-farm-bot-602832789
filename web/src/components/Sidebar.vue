@@ -251,14 +251,6 @@ watch(
           {{ brand.subtitle }}
         </div>
       </div>
-      <button
-        type="button"
-        class="farm-brand-close lg:hidden"
-        aria-label="关闭导航"
-        @click="appStore.closeSidebar"
-      >
-        <span class="i-carbon-close" aria-hidden="true" />
-      </button>
     </div>
 
     <div class="farm-brand-divider" aria-hidden="true" />
@@ -368,19 +360,9 @@ watch(
   font-size: 11px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   letter-spacing: 0;
-}
-.farm-brand-close {
-  display: inline-grid;
-  width: 40px;
-  height: 40px;
-  flex: none;
-  place-items: center;
-  border-radius: 10px;
-  color: var(--muted-text);
-  font-size: 20px;
-}
-.farm-brand-close:hover {
-  background: var(--surface-2);
+  /* 场景英文副标题必须单行：QQ RANCH ASSISTANT 比 FARM 长，
+     换行会把品牌区撑高，导致农场/牧场左上角高度不一致。 */
+  white-space: nowrap;
 }
 .farm-brand-divider {
   height: 1px;

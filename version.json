@@ -1,12 +1,20 @@
 {
   "major": 3,
   "minor": 39,
-  "patch": 26,
-  "build": 292,
-  "version": "3.39.26",
-  "updatedAt": "2026-11-27T04:09:09.492Z",
+  "patch": 27,
+  "build": 293,
+  "version": "3.39.27",
+  "updatedAt": "2026-11-27T04:17:20.662Z",
   "lastCommit": "—",
   "history": [
+    {
+      "version": "3.39.27",
+      "build": 293,
+      "date": "2026-11-27",
+      "summary": "移除侧栏品牌区关闭叉，修复牧场英文副标题换行导致的高度不一致",
+      "commit": "—",
+      "type": "patch"
+    },
     {
       "version": "3.39.26",
       "build": 292,
