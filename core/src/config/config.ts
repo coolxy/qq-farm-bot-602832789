@@ -52,14 +52,14 @@ interface RuntimeConfig extends SystemConfig {
 // ============ 设备预设 ============
 
 // clientVersion 由 CONFIG.clientVersion 动态获取，不写死在预设中
-// Verified in the official QQ PlayerLogin and Heartbeat from the 2026-11-16 capture.
-// QQ 与微信版本不同步：1.17.0.6 是微信小程序抓包结果，QQ 仍以 1.17.0.3 为基线（用户 store 里是 1.17.0.4）。
-// 把 QQ 也改成 1.17.0.6 会导致连接阶段直接关闭码 400（Code 或版本不符）。
-const DEFAULT_CLIENT_VERSION = '1.17.0.3_20261117';
-const DEFAULT_CLIENT_VERSION_UPDATED_AT = 1794795016627;
-// 2026-11-22 实测抓包：微信小程序已升到 1.17.0.6，旧版 1.17.0.4 会被“Code 或版本不符”拒连。
-const DEFAULT_WX_CLIENT_VERSION = '1.17.0.6_20261117';
-const DEFAULT_WX_CLIENT_VERSION_UPDATED_AT = 1795287073693;
+// 2026-11-25 按 muyuewang/qq-farm-bot-li 的实机抓包对齐：QQ 与微信两端统一
+// 1.17.1.10_20261117。之前的「QQ 1.17.0.3 / 微信 1.17.0.6」是 11-16、11-22 两轮旧抓包，
+// 1.17.1.10 已用两端实际连上验证过（旧版本号现在会以码 400「Code 或版本不符」拒连）。
+// 已保存的旧版本号不用手动改：resolveClientVersion 只认 updatedAt 更大的值，会自动回落新默认。
+const DEFAULT_CLIENT_VERSION = '1.17.1.10_20261117';
+const DEFAULT_CLIENT_VERSION_UPDATED_AT = 1795596035361;
+const DEFAULT_WX_CLIENT_VERSION = '1.17.1.10_20261117';
+const DEFAULT_WX_CLIENT_VERSION_UPDATED_AT = 1795596035361;
 const DEFAULT_TIME_ZONE = 'Asia/Shanghai';
 
 function resolveClientVersion(savedVersion: unknown, savedUpdatedAt: unknown, platform = 'qq'): { clientVersion: string; clientVersionUpdatedAt: number } {

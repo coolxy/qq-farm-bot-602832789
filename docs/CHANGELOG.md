@@ -15,6 +15,34 @@
 
 | 版本 | 更新序号 | 日期 | 更新内容 | 提交 |
 | --- | --- | --- | --- | --- |
+| v3.39.28 | #295 | 2026-11-27 | 更新助手拉取改 HTTP/1.1 + 重试，失败原因按日志点名 | — |
+| v3.39.27 | #293 | 2026-11-27 | 移除侧栏品牌区关闭叉，修复牧场英文副标题换行导致的高度不一致 | — |
+| v3.39.26 | #292 | 2026-11-27 | 恢复牧场今日统计「其他数据」（无数据隐藏），以薯换福新高价立即卖出开关 | — |
+| v3.39.25 | #291 | 2026-11-27 | 牧场今日统计去除「出栏」（放生）瓦片 | — |
+| v3.39.23 | #290 | 2026-11-27 | 以薯换福好友比价改为全量扫描 + 报价累积不覆盖 | — |
+| v3.39.22 | #289 | 2026-11-26 | 牧场今日统计重排 15 项并加回「任务」瓦片 | — |
+| v3.39.21 | #288 | 2026-11-26 | 同步上游 `cd30ca7→961f50e` 好友池缓存目录扫描修复 | — |
+| v3.39.20 | #287 | 2026-11-26 | 移除 `core` 死依赖 `qrcode`，修复 `--frozen-lockfile` 构建失败 | — |
+| v3.39.19 | #286 | 2026-11-26 | 同步上游 `27ad69f→cd30ca7`，保留本地定制 | — |
+| v3.39.18 | #285 | 2026-11-26 | 库存图鉴改为「已解锁/总数」并统一图鉴命名 | — |
+| v3.39.17 | #283 | 2026-11-26 | 牧场今日统计去除「任务」项 | — |
+| v3.39.16 | #282 | 2026-11-26 | 牧场今日统计改为指定 15 项，兑换按钮统一，清理以薯换福面板说明 | — |
+| v3.39.15 | #281 | 2026-11-26 | 修复以薯换福出售时间等配置保存后丢失，统一活动卡片背景色 | — |
+| v3.39.13 | #280 | 2026-11-26 | 以薯换福自动化开关移入活动设置页的活动卡片 | — |
+| v3.39.12 | #279 | 2026-11-26 | 修复「出售时间」默认值被归一化吞掉 | — |
+| v3.39.11 | #278 | 2026-11-26 | 以薯换福自动化按新版面板补齐配置项 | — |
+| v3.39.10 | #277 | 2026-11-26 | 常规更新 | — |
+| v3.39.9 | #276 | 2026-11-26 | 同步上游以薯换福自动卖薯修复与自定义开始时间 | — |
+| v3.39.8 | #275 | 2026-11-26 | 常规更新 | — |
+| v3.39.7 | #273 | 2026-11-26 | 常规更新 | — |
+| v3.39.6 | #272 | 2026-11-26 | 以薯换福页面完全按 li 版重做 | — |
+| v3.39.5 | #271 | 2026-11-26 | 按 li 版设计稿重构以薯换福活动页，修复补种模块路径与面板版本号不同步 | — |
+| v3.39.3 | #270 | 2026-11-26 | 常规更新 | — |
+| v3.39.2 | #269 | 2026-11-26 | 常规更新 | — |
+| v3.39.1 | #268 | 2026-11-26 | 修复分享确认失败后冷却结束会重发 cmd 98 | `b75bb5e2` |
+| v3.39.0 | #267 | 2026-11-26 | 移植 li 版以薯换福运行时方案，同步协议与游戏客户端版本 | `b75bb5e2` |
+| v3.38.0 | #266 | 2026-11-25 | 新增以薯换福收购记录与自动比价卖薯，补齐上一轮遗留项 | — |
+| v3.37.1 | #265 | 2026-11-25 | 修复以薯换福兑换协议与自家铺子额度，补上提成领取 | — |
 | v3.37.0 | #263 | 2026-11-25 | 新增以薯换福完整闭环：种植、出售、分享与兑换商店 | — |
 | v3.36.10 | #262 | 2026-11-25 | 手机端设置页入口改成等宽三列网格 | — |
 | v3.36.9 | #261 | 2026-11-25 | 修掉更新助手心跳的时间单位错位 | — |
@@ -252,6 +280,418 @@ flowchart TB
 ```
 
 ## 详细记录
+
+### 2026-11-27 · v3.39.28（#295） · 更新助手拉取改 HTTP/1.1 + 重试，失败原因按日志点名
+
+NAS 上一键更新报 `fatal: unable to access 'https://github.com/602832789/qq-farm-bot.git/': OpenSSL SSL_read: SSL_ERROR_SYSCALL, errno 0`。服务没受影响（助手在 pull 阶段就退出，不会重建容器），但一次网络抖动就让整次更新作废，且面板只给一句「常见原因是本地有未提交改动……」，与真实原因无关。
+
+`scripts/docker-update-agent.sh` 三处改动：
+
+- **强制 HTTP/1.1 + 低速断连**：`GIT_NET_OPTS="-c http.version=HTTP/1.1 -c http.lowSpeedLimit=1024 -c http.lowSpeedTime=30"`。`SSL_ERROR_SYSCALL` 的形态是 TCP 还连着、TLS 记录被中间设备静默丢掉，HTTP/2 的多路复用长连接在部分代理 / NAT / 运营商下更容易被掐；低速断连则把「假死」变成可重试的失败，不再挂在半死连接上干等。
+- **拉取重试**：`run_pull` 改为最多 `UPDATE_PULL_ATTEMPTS` 次（默认 3），第 n 次失败后等 `n × UPDATE_PULL_RETRY_DELAY` 秒（默认 5）。成功后记一行「第 N 次拉取成功」。`set -u` 下也保持幂等：次数/间隔非法一律回落默认值。
+- **失败原因按日志点名**：新增 `pull_failure_hint`，读日志尾部按优先级判定——fast-forward 失败（本地改动/分叉）→ 凭据（`UPDATE_GIT_TOKEN`）→ SSL/TLS → DNS/出网，都不匹配才回落原来那句泛化文案。SSL 分支刻意排在 `unable to access` 之前，因为 TLS 报错行本身就含这个串。
+
+测试 `web/tests/docker-update-agent.test.mjs`：失败用例改断「本地有未提交改动」；新增两条真跑用例——前两次 `SSL_ERROR_SYSCALL` 第三次成功（断言正好试到第 3 次、日志留痕「第 3 次拉取成功」）、SSL 一直失败时作业里写的是网络原因而非本地改动；静态闸门补 `http.version=HTTP/1.1`、`PULL_MAX_ATTEMPTS`、`pull_failure_hint` 三条。web 401 全绿。
+
+注意：本次改动要先有一次成功的 pull 才会落到 NAS 上——NAS 上的旧脚本会用旧参数完成这次更新，之后的重试逻辑才生效。
+
+### 2026-11-27 · v3.39.27（#293） · 移除侧栏品牌区关闭叉，修复牧场英文副标题换行导致的高度不一致
+
+- **移除关闭叉**：侧栏品牌区（QQ农场智能助手旁边）的 `farm-brand-close` 按钮其实是移动端抽屉的关闭按钮（带 `lg:hidden`，仅窄屏显示）。抽屉另有遮罩点击（`farm-drawer-overlay`）、`ESC` 键、点击导航项三种关闭途径，这个叉属冗余，连同对应 CSS 一并删除。
+- **修复换行**：`.farm-brand-caption` 加 `white-space: nowrap`，`QQ RANCH ASSISTANT` 不再折行，与 `QQ FARM ASSISTANT` 同为单行，农场/牧场品牌区左上角高度统一。
+- **闸门**：`ranch-scene-shell.test.mjs` 新增两条静态断言——品牌区不再有 `farm-brand-close` 且抽屉的遮罩/ESC/导航项关闭方式仍在；caption 带 `white-space: nowrap`。
+
+### 2026-11-27 · v3.39.26（#292） · 恢复牧场今日统计「其他数据」（无数据隐藏），以薯换福新高价立即卖出开关
+
+两项需求：
+
+**1. 恢复牧场首页「今日统计」的「其他数据」**——固定 14 项之外、当天确实有记录的动作重新以瓦片展示，今日无记录时整组隐藏，不留一排 0。`RanchOverview.vue` 恢复 `operationEntries`（只保留 `count > 0`）、`otherActionTiles`（基于前者，过滤掉已在固定 14 项里的 key，用 `ranchActionLabels` 做中文名）并追加进 `todayTiles`；`TODAY_TILE_ORDER` 未列出的动作排末尾。测试 `ranch-today-tiles-order.test.mjs` 改回「固定 14 项在前 + 其他数据追加末尾」，并新增闸门确保「有记录才展示、无数据隐藏」。
+
+**2. 以薯换福新增「高价立即卖出」开关**——扫到好友铺子成交价达到阈值时，无视「出售时间」闸门与「至少比自家高 N 个」的价差限制，按成交价降序直接卖；默认关闭、默认阈值 500 福气币/个，均可配置。
+- 后端：新增配置 `yishu_quick_sell_enabled`（默认 false）、`yishu_quick_sell_price`（默认 500，范围 1~1000000），落在 `types/config.ts`、`shared-state.ts` 默认值与归一化区间；`yishuhuanfu-auto.ts` 在 `sellSweetPotatoes` 里按 `bestFriendPrice >= 阈值` 判定直卖命中，命中时绕过时间闸门与 minGain，未命中维持原逻辑；开了开关后「只开卖薯未到点」不再提前短路，需读状态并扫价才能判断。
+- 前端：设置面板「好友比价与出售」新增开关与门槛输入（仅开关打开时显示），`setting.ts` 同步两个字段；帮助文案补充说明。
+- 测试：core 新增 5 条自动化用例（未到点扫到高价直卖 / 未达阈值仍按闸门跳过 / 阈值可配 / 提前读状态扫价 / 默认行为不变），`yishu-config-defaults` 补默认值与归一化断言；web 面板按键清单补齐。验证：core 1162 全绿、web 397 全绿、web typecheck 通过、改动文件无新增 lint 问题。
+
+### 2026-11-27 · v3.39.25（#291） · 牧场今日统计去除「出栏」（放生）瓦片
+
+- 牧场首页「今日统计」移除「出栏」瓦片：该瓦片统计的是放生动物（`release` / `DonateAnimal`），放生是手动动作、自动化里没有该任务，计数恒为 0，展示无意义。
+- `RANCH_TODAY_ACTIONS` 与 `TODAY_TILE_ORDER` 同步删除 `release`，固定项由 15 减到 14（4 资源 + 10 动作），注释计数同步更新。
+- 测试 `ranch-today-tiles-order.test.mjs` 更新顺序断言与计数，并新增闸门防止「出栏」被加回。
+
+### 2026-11-27 · v3.39.23（#290） · 以薯换福好友比价改为全量扫描 + 报价累积不覆盖
+
+用户反馈：好友比价获取不到全部好友价格、已获取的好友不缓存且被新一轮覆盖、要求数量无上限（每轮约 60 个好友）。诊断确认三个现象都存在：`takeScanWindow` 在候选池 > limit 时按窗口截断轮换（本地默认 60 / 自动卖薯传 20 / 硬上限 200），每轮 `friendScanCache = {at,data}` 整体覆盖，前端列表也整批替换。
+
+修复（`core/src/services/activity-center/yishuhuanfu.ts`）：
+- **无上限**：`takeScanWindow` 不再截断，每轮扫整个候选池（自家 + 本号好友 + 面板其它账号好友），`limit` 参数仅作兼容字段、返回值改为实际候选数，`pendingCount` 恒 0。
+- **累积不覆盖**：新增 `friendQuotePool: Map<gid, shop>`，本轮扫到的按 gid 合并进池（覆盖同 gid 旧值），本轮没扫到 / 查询失败的好友保留历史报价；池按 `ownGid` 归属，切号自动清空；卖薯成交 / 分享后整池作废下轮重扫。返回 `heldOver`（沿用上次报价数），前端比价说明显示「其中 N 个沿用上次报价」。
+- 不做「本轮没返回就删 gid」的清理，避免好友列表波动时又把上轮价格清掉。
+
+测试：改写 `yishuhuanfu-service.test.js` 的轮换测试为「limit 不截断 + 一轮全纳入」，新增「跨轮累积不丢好友 / 连续空列表不清池」用例。验证：core 1157 全绿、web 395 全绿、typecheck 通过、`git diff --check` 通过。
+
+### 2026-11-26 · v3.39.22（#289） · 牧场今日统计重排 15 项并加回「任务」瓦片
+
+按用户指定顺序重排 `RanchOverview.vue` 今日统计：`TODAY_TILE_ORDER` 与 `RANCH_TODAY_ACTIONS` 同步调整为 —— 金券、经验、松果、便便、出售、偷取、喂养、蚊子、帮催产、催产、帮清理、清理、收产物、出栏、任务。相比上一版：喂养/蚊子、帮催产/催产、帮清理/清理各自对调，收产物/出栏后移，并把之前移除的「任务」（`action-claimTasks`）加回末位，共 15 项。
+
+测试 `ranch-today-tiles-order.test.mjs` 同步更新顺序断言与计数（11 项动作），并把「不再展示任务」闸门改为「任务必须在最后一位」，动作 key 校验加上 `claimTasks`。验证：web 395 全绿、typecheck 通过、改动文件 lint 零告警。
+
+### 2026-11-26 · v3.39.21（#288） · 同步上游 `cd30ca7→961f50e` 好友池缓存目录扫描修复
+
+上游 3 提交（a602031 / a58f09d / 961f50e），仅采纳 a602031 的**好友池缓存目录扫描**修复：`gid-cache.ts` 新增 `listAllKnownFriendGidsCaches()`，`yishuhuanfu.ts` 好友池改为以缓存目录所有 `<accountId>.json` 为准（不再只按 accounts.json 账号列表读），避免面板只挂一个账号时历史账号好友全丢；保留按账号列表读的兼容回退。新增 `core/tests/yishuhuanfu-panel-cache.test.js` 2 条。
+
+**本地化适配**：本地 `runtime-paths.getDataDir()` 不支持上游的 `FARM_DATA_DIR` 环境变量（data 目录固定），上游测试用该变量重定向目录会失败。给 `listAllKnownFriendGidsCaches` 加可选 `dirOverride` 参数供测试隔离，生产调用不传参、行为不变；测试改为传临时目录。
+
+**跳过**：a58f09d / 961f50e 的默认值改动（`scan_interval_minutes` 30→120、`scan_friend_limit` 20→50、出售时间 14:00）——本地用 `yishu_scan_interval_hours`（默认 2h=120min）小时制优先、出售时间锁 23:00、`yishu_scan_friend_limit` 用户的配置值语义不同；且本地 Settings.vue 已重写，上游插入的 `yishu_*_minutes: 120` 三处字段在本地 UI 中不存在。`yishuhuanfu-auto.ts` 的比价明细日志也随默认值改动一并跳过。
+
+验证：core 1156 全绿（原 1154 + 新增 2）。
+
+### 2026-11-26 · v3.39.20（#287） · 移除 `core` 死依赖 `qrcode`，修复 `--frozen-lockfile` 构建失败
+
+NAS 端 `docker compose up -d --build` 在 `pnpm -C core install --prod --frozen-lockfile` 步骤报 `ERR_PNPM_OUTDATED_LOCKFILE`：`core/package.json` 声明了 `qrcode@^1.5.4`，但 `pnpm-lock.yaml` 无对应条目。
+
+排查确认 `qrcode` 为**死依赖**：全仓库（含 `core/src`、`web`、Dockerfile、compose）无任何 `import/require` 引用，本地也从未安装。该依赖在 v3.39.9 同步上游时被加入 `package.json`，但锁文件未同步，后续也无代码使用。
+
+修复：从 `core/package.json` 移除 `qrcode`，`package.json` 与锁文件重新对齐。验证 `pnpm -C core install --prod --frozen-lockfile` 通过，`pnpm build:core` 编译通过，core 测试 1154 条全绿。
+
+### 2026-11-26 · v3.39.19（#286） · 同步上游 `27ad69f→cd30ca7`，保留本地定制
+
+以 `27ad69f` 为 base（`git rev-list --left-right --count` = 0/8，基线确认无偏差），对上游 8 个提交逐文件三方合并。GitHub 直连报 502，改用 `gh-proxy.org` 镜像拉取，提交 SHA 一致。
+
+**采纳**：
+- `63f4cb5` 好友池读取路径：`services/activity-center/` 下 `require('../models/store')` 指向不存在的目录，异常被 catch 吞掉，面板好友池只剩本账号好友。本地这个文件此前仍是错路径（记忆里 v3.39.2 修的是另一个 `selfGid()` 的 require），本次改成 `../../models/store`。
+- `5834a15` + `cd30ca7` 出售目标重置：移除监听 `activity.shop.gid` 的 watch（快照刷新会把刚选中的好友铺子清空、按钮悄悄变回卖给自己），账号/活动切换由父级 `v-if` 卸载页面完成。
+- `ea6ae4b` 深色模式：`ActivityShell` / `ActivityCenter` / `YishuHuanfuTab` / `YishuHuanfuActivityPage` 的硬编码暖白背景改成 `--ui-surface-solid` 的 `color-mix`，`style.css` 新增 `--yshf-accent` / `--yshf-accent-soft` 浅深两套色值。冲突只在 `style.css` 的主题变量块，按「本地 8px 圆角与阴影优先 + 叠加新增色变量」手解。
+- 新增 `web/tests/yishuhuanfu-target-gid.test.mjs` 3 条（编译真实 SFC 的 setup 执行），本地全通过；顺手清掉上游文件里多余的 eslint-disable 与风格错误。
+
+**跳过**：`cec615d` 把默认出售时间改成 14:00（本地按用户要求锁 23:00，Settings.vue 的三处同款改动一起跳过）；上游 `web/dist` / `core/dist` 产物（本地构建生成）；`stores/activity-center.ts` 的净变化只是一段注释。
+
+验证：core **1154 全绿**、web **395 全绿**、`pnpm typecheck` 通过、改动文件 eslint 零告警、`git diff --check` 通过。本地定制逐项核对仍在：出售时间 23:00、页面滚动修复、兑换按钮贴底、牧场统计 14 项、库存图鉴显示。
+
+### 2026-11-26 · v3.39.18（#285） · 库存图鉴改为「已解锁/总数」并统一图鉴命名
+
+**牧场首页库存**：普通图鉴、巨大化图鉴（原「巨大图鉴」）改为显示「已解锁条目 / 总条目」。数据取 `/api/ranch?view=illustrated` 的 `book.animals`：普通按 `unlocked`、巨大化按 `giant.unlocked` 计数。实测账号 1 为普通 12/28、巨大化 10/28。
+
+**农场首页库存**：原「普通收藏点 / 典藏收藏点」改名为「作物图鉴 / 超变图鉴」，同样显示「已解锁 / 总条目」。数据取 `/api/illustrated` 的 `crop.items` 与 `mutant.items` 按 `unlocked` 计数，实测作物 175/223（与用户给的示例一致）、超变 60/80。Dashboard 在 10 秒一次的 `refresh()` 里按 60 秒节流拉取图鉴，避免反复打两个重接口。
+
+验证：新增 `web/tests/illustrated-stock-tiles.test.mjs` 3 条；web **392 条全绿**，`pnpm typecheck` 通过，改动文件 eslint 零告警。
+
+### 2026-11-26 · v3.39.17（#283） · 牧场今日统计去除「任务」项
+
+在 v3.39.16 的 15 项基础上删掉「任务」（`claimTasks`），现在固定 14 项：金券、经验、松果、便便、出售、偷取、蚊子、喂养、催产、收产物、出栏、清理、帮清理、帮催产。`RANCH_TODAY_ACTIONS` 与 `TODAY_TILE_ORDER` 同步删除，测试新增一条闸门防止「任务」被加回来。web **389 条全绿**，`pnpm typecheck` 通过。
+
+### 2026-11-26 · v3.39.16（#282） · 牧场今日统计改为指定 15 项，兑换按钮统一，清理以薯换福面板说明
+
+**牧场首页今日统计**：改成固定 15 项，按指定顺序为金券、经验、松果、便便、出售、偷取、蚊子、喂养、催产、收产物、出栏、清理、帮清理、帮催产、任务。原来只有 8 项固定 + 其它有记录才出现，现在 15 项始终展示（无记录为 0）。实现上把 11 个动作键收敛进 `RANCH_TODAY_ACTIONS`，与 `TODAY_TILE_ORDER` 一一对应；删除 `otherActionTiles`。`ranch-display.ts` 补 `produceFriend`（帮催产）的标签与图标，并把 `cleanFriend` 改为「帮清理」。动作 key 与后端 `recordAction(action)` 的命名一致。
+
+**兑换商店按钮**：文案固定为「兑换」，「福气币不足 / 暂不可兑」移到 `title`；卡片改 flex column、按钮 `margin-top:auto` 贴底，`min-height:28px` + `white-space:nowrap`，同一行卡片等高时按钮整齐对齐。好友比价那处 `.catalog-buy.narrow`（卖给他/卖自己）不变。
+
+**以薯换福自动化面板**：删除顶部「领种子 / 分享 / 收提成都是…」说明文字。默认值核对：提成间隔 6h、比价间隔 2h、出售时间 23:00、至少比自家高 1、保留 0，后端默认值本来就正确；但账号 1 的已保存配置被上一版 `!!v` 缺陷污染（间隔被夹成 1、价差成 0），已通过 API 按默认值重写并读回确认，账号 3 原本就是默认值。
+
+验证：web **388 条全绿**，`pnpm typecheck` 通过，改动文件 eslint 零告警。
+
+### 2026-11-26 · v3.39.15（#281） · 修复以薯换福出售时间等配置保存后丢失，统一活动卡片背景色
+
+**症状**：在活动卡片里选好「出售时间」保存，再打开又空了；其他几个数值项（提成间隔、比价间隔、最小价差、保留数量等）实际上也是坏的。
+
+**根因**：后端 `applyConfigSnapshot()` 保存自动化配置时，循环末尾有个兜底分支 `(next.automation)[k] = !!v` —— 所有没被识别成数值/对象的键一律按布尔存。`yishu_sell_after_time` 的字符串 `'23:00'` 因此被写成 `true`，前端再读到 `true` 时下拉框匹配不到任何选项，看起来就是「没保存」；那批新增的 yishu 数值键同样被 `!!v` 变成布尔。`normalizeAccountConfig()` 里有一份一模一样的兜底，两个链路都中招。
+
+**修法**：在 `shared-state.ts` 增加共用的 `normalizeYishuAutomationValue(key, value)`——数值项按 `YISHU_NUMERIC_RANGES` 夹取、时间项走 `normalizeSellAfterTime()`、其余按布尔；`normalizeAccountConfig()` 与 `applyConfigSnapshot()` 两处循环都在兜底之前先转给它。以后新增 yishu 键只要登记进区间表就自动生效，不用再改两处。
+
+**另一项**：`YishuHuanfuActivityPanel.vue` 去掉 rose 主题背景/边框，改用活动弹窗里统一的中性灰卡片样式（与「节令小札」一致），内层分组也改成 `bg-gray-50 / dark:bg-gray-800/60`。
+
+验证：`core/tests/yishu-config-defaults.test.js` 增 2 条保存链路闸门（出售时间保持字符串、数值项保持数字、显式空串不被默认值覆盖）；`web/tests/yishu-activity-panel.test.mjs` 增 1 条背景色闸门。core **1154 全绿**、web **385 全绿**，`pnpm typecheck` 通过。
+
+### 2026-11-26 · v3.39.13（#280） · 以薯换福自动化开关移入活动设置页的活动卡片
+
+原来以薯换福的整块配置挂在「自动化」页里，和其他活动（节令小札 / 牧歌初启 / 快乐不独享 / 奶茶）分在两处。这次把它整体搬进「活动设置」页 → 活动卡片的配置弹窗，和其他活动开关并列；自动化页不再保留副本，避免同一份配置两处编辑。
+
+改动：
+
+- 新增 `web/src/components/settings/YishuHuanfuActivityPanel.vue`：接管原卡片全部 14 个 `yishu_*` 配置（总开关、种子/分享、提成与间隔、比价开关与间隔、出售时间、最小价差、保留数量、好友上限、起卖数量、兜底卖自家），沿用 `automation-setting-item` 开关行样式（父组件是 scoped，样式必须自带一份）。
+- `AutomationSettingsForm.vue`：删掉整段以薯换福卡片与只服务于它的 `sellTimeOptions`。
+- `AccountFeatureSettings.vue`：活动弹窗里渲染 `YishuHuanfuActivityPanel`；`activityKeys` 加入 `yishu_enabled`，卡片状态与「已配置」判断一致；摘要标签补「以薯换福」。
+- `ActivityDirectoryPage.vue`：顺手删掉 `activityIconSrc()` 里第二处 `yishuhuanfu` 分支——前面已经 `return` 过，后面那段永远不可达，`vue-tsc` 因此一直报 TS2367（修完 `pnpm typecheck` 恢复全绿）。
+
+验证：新增 `web/tests/yishu-activity-panel.test.mjs` 4 条（自动化页不得再出现 `yishu_`、活动面板必须包含面板组件、14 个键全覆盖、总开关计入活动项统计、面板自带样式）；web **384 条全绿**（原 380），`pnpm typecheck` 全绿，改动文件 eslint 零告警。
+
+### 2026-11-26 · v3.39.12（#279） · 修复「出售时间」默认值被归一化吞掉
+
+补完面板配置项后实测 `cloneAccountConfig({})` 的返回值，发现 `yishu_sell_after_time` 仍然是空串——**默认的 `23:00` 从来没生效过**。
+
+原因：这个键在归一化时走的是 `normalizeSellAfterTime(srcAutomation[key])`，而该函数对 `undefined` 的返回值就是空串（设计上「非法值一律当不限时段，只推迟绝不彻底停」）。之前默认值恰好也是空串，所以缺陷一直没暴露；把默认改成 `23:00` 之后，界面显示 23:00、后端却按「不限时段」跑，属于最难排查的那类不一致。
+
+修法：区分「配置里没有这个键」和「显式存了空串」——前者取默认值，后者保留空串（用户在界面上明确选择「不限时段」，不能被默认值覆盖回去）。
+
+新增 `core/tests/yishu-config-defaults.test.js` 6 条闸门：新默认值全项、显式 `false` / 空串不被覆盖、`7:5 → 07:05`、`25:99 → 23:59`、非法值退化为空串、数值项超界夹取、默认配置对象与归一化结果逐项一致。
+
+core **1152 条全绿**。
+
+### 2026-11-26 · v3.39.11（#278） · 以薯换福自动化按新版面板补齐配置项
+
+参照新版以薯换福面板（v1.0.2 脚本配置）重排设置卡片，并补上原本缺失的六项控制：
+
+| 新增配置 | 键名 | 默认 | 作用 |
+| --- | --- | --- | --- |
+| 启用 | `yishu_enabled` | 开 | 总开关，关掉后整轮不跑（子开关保持原值） |
+| 提成领取间隔（小时） | `yishu_commission_interval_hours` | 6 | 提成是累计金额，间隔内有余额也先不动，避免每 10 分钟一次写请求 |
+| 定时比较好友收购价 | `yishu_scan_enabled` | 开 | 关掉后不扫好友，只卖自己铺子（自家不限额度） |
+| 比价间隔（小时） | `yishu_scan_interval_hours` | 2 | 替代原来的分钟项；`yishu_scan_interval_minutes` 保留为旧配置兼容读取 |
+| 至少比自家高 | `yishu_sell_min_gain` | 1 | 好友收购价必须 ≥ 自家成交价 + N 才卖给他，避免廉价出手 |
+| 保留蜜薯数量 | `yishu_sell_keep_count` | 0 | 卖薯前先从背包扣掉这部分，起卖阈值也按可卖量判 |
+
+配套调整：
+
+- `yishu_sell_after_time` 默认值从「空串 = 不限时段」改为 `23:00`（现有账号已保存的值不受影响，仅新账号/未配置的取新默认）。
+- 新增 `resolveScanIntervalMinutes()`：小时项优先、分钟项兜底、都没有时按 2 小时；避免少一个字段就让间隔退化成 0（每轮全量扫好友）。
+- 卖薯日志与每轮摘要补上 `sellKeep` / `sellMinGain` / `scanEnabled`，并在两种新跳过原因里写明具体数值：「背包 N 个没超过保留数量 X」「N 家好友的收购价都没比自家（X + Y）更高」。
+- 前端设置卡片按「每日种子与暴击 / 小铺提成 / 好友比价与出售 / 比价范围与兜底」分组，总开关关闭时隐藏其余项。
+
+验证：core **1146 条全绿**（新增 9 条覆盖总开关、保留量、最小价差、小时比价间隔、关闭比价只卖自家、提成间隔），web 380 条全绿。
+
+### 2026-11-26 · v3.39.10（#277） · 牧场场景恢复失败不再误判断连，单拍心跳不直接降到 stall
+
+**一、问题定位（来自 NAS 容器日志）**
+
+QQ 账号在容器里「登录一会儿就掉线」，日志给的是 `source=game_scene_unknown`：`牧场操作结束后场景恢复未确认，需要重新登录`，`connectionAgeMs=780004`（在线满 13 分钟后断）。断连瞬间 `heartbeatMisses=2`、`lastInboundAgeMs=40015`、`requestBudget.mode=stall`（`autoSentInWindow=143` 而 stall 限额 24）。
+
+两条因果链叠在一起：
+
+- 牧场是全项目唯一切场景的业务（`inScene`：`loginGameScene(2)` → 干活 → `loginGameScene(previous)`）。容器弱 CPU + 网络抖动下这条恢复请求超时，`transport.ts` 在 `finally` 里直接 `invalidateGameScene()` → `terminate()`——**场景没切回来，被当成连接已死**。
+- 请求量一上来先漏一拍心跳，`classifyHealth` 的 `misses > 0` 立刻把整个账号降到 `stall`（自动任务限额 180 → 24），排队更堵、下一拍更容易丢，形成「抖动 → 降级 → 更堵」的正反馈。
+
+代价在两端并不对称：微信有 `loginBuffer` / `refreshtoken`，断了 60 秒换票回来，面板上看不出来；QQ 只有一次性 Code，断一次就要外部补票。所以只有 QQ 表现为「掉线」，也只有容器这种慢环境能稳定复现。
+
+**二、改动**
+
+- `utils/network.ts`：新增 `markGameSceneUnknown()`，只把 `userState.globalSceneId` 置 0（场景未知），**不动连接**；`invalidateGameScene()` 保留，仅作为连接确实不可用时的兜底。连接死活交给心跳（漏拍 + 静默双条件）判断，职责不再混在一起。
+- `services/ranch/transport.ts`：恢复失败改调 `markGameSceneUnknown()`；`previous` 做 `0 → 1` 兜底，避免把 0 当场景 id 发 `PlayerSceneLogin`；静默 > 15 秒时跳过一次重试（但不再 terminate）。
+- `services/ranch/friends.ts`：好友牧场离场失败同样只降级场景状态，不断连接。
+- `utils/request-governor.ts`：`misses >= 2` 才进 `stall`，单拍失败只降到 `cautious`。
+
+`refreshRequired` 在项目里的语义是「让面板重拉一次数据核对」，不是「要求重新登录」，因此保留 `true`，只把 notice 文案改成「下次牧场操作前会自动重新进入；连接保持在线」。
+
+**三、验证**
+
+- `pnpm build:core` 通过；core **1137 条全绿**（新增「场景未知后按农场 1 恢复」「单拍心跳只到 cautious」两条），web 380 条全绿。
+- 回归测试钉住新语义：场景恢复失败**不得**产生 `invalidate`，否则 QQ 会因为牧场一次抖动被踢成永久离线。
+
+### 2026-11-26 · v3.39.9（#276） · 同步上游以薯换福自动卖薯修复与自定义开始时间
+
+上游 `muyuewang/qq-farm-bot-li` 从本地上次的对照点 `678e4b1` 前进到 `27ad69f`。这段里以薯换福被上游自己改了 6 次，其中前 3 次（`a34fcf3` / `b502f7e` / `5c29f10`）本地在 v3.39.7 已经按 zip 逐字移植，**基线锁定在 `5c29f10`**（6 个关键文件逐字节一致）。本轮同步的是之后 3 个提交，加上沿途不冲突的通用修复。
+
+**一、以薯换福增量（`5c29f10 → 27ad69f`，基线文件级对齐）**
+
+- `4d86c5b`：自动卖薯定时器被静默清掉、余额读不到 —— 补诊断日志与看门狗。
+- `d761a79`：自动卖薯**读错字段导致永不卖出**（这是真 BUG，本地同款实现里也一样错）；新增手填 GID 卖薯。
+- `27ad69f`：自动卖薯支持**自定义开始时间**（`yishu_sell_after_time`，`"HH:MM"`，空串 = 不限），以及**面板全账号好友比价**（扫描池从单账号扩到所有在跑账号，去重后轮转窗口）。
+- 落地文件（`git merge-file` 三方合并，零冲突）：`services/activity-center/yishuhuanfu.ts`、`services/yishuhuanfu-auto.ts`、`web/src/components/activity/YishuHuanfuTab.vue`、`web/src/views/activity-center/YishuHuanfuActivityPage.vue`、`web/src/stores/activity-center.ts` 与三个 yishuhuanfu 测试。
+- 配置面：`shared-state.ts` 新增 `yishu_sell_after_time` 默认值与 `normalizeSellAfterTime()`（非法值一律当「不限时段」，闸门只推迟卖薯、绝不彻底停卖），`yishu_scan_friend_limit` 上限 50 → 200；`types/config.ts` 与 `web/src/stores/setting.ts` 同步字段。
+- 页面滚动适配保留：`.yshf-view` 仍是本页的滚动容器（本地外层 `overflow:hidden`），合并后重新核对了 `overflow-y:auto`、`min-height:0`、`> * { flex:none }` 三件套。
+
+**二、按需采纳的通用项**
+
+- `core/src/controllers/admin/debug-routes.ts` + `services/debug-proto.ts`：调试协议路由，挂到 `admin/index.ts`（叠加在本地 career / panel-notification 之后）。
+- `napcat/plugins/qq-miniapp-openauth`：恢复本地被误删的登录插件（`full-review-regression` 在钉它）。
+- `gameConfig/Plant.json` 与 10 张道具图、`web/public/activity-assets/pet-diary/` 120+ 张活动素材：取上游新版。
+- `docs/yishuhuanfu-20261125.md`：上游对本活动的协议说明。
+
+**三、明确跳过（与本地架构冲突，保留本地实现）**
+
+- **网络层重构**：`utils/stall-probe.ts` / `tcp-queue.ts` / `traffic-meter.ts` 与 `network.ts`、`worker-manager.ts`、`runtime-engine.ts` 的配套改动。本地这套是另一套重写（请求优先级、队列、探针），上游是并行另一版，合并只会两边都坏。
+- **QQ 机器人单聊推送**：`services/qq-bot-push.ts`（1400+ 行）+ 前端 786 行设置面板。它要在 `runtime-engine` 里建服务、在 `account-routes` 挂 14 条路由、在 `global-config` 存配置、在 `Settings.vue` 挂面板 —— 全部落在本地重写过的文件上，属于独立一轮的活。
+- **牧歌 / 节令自动化抽离**（`muge-auto.ts` / `solar-calendar-auto.ts` / `ranch/muge.ts`）：本地已有等价实现（`startMugeAutomationTimer` 等），引入会双跑。
+- **设置页双列瀑布流**（`5c29f10` 的布局改动）与部署脚本 `tools/updater/*`、`compose.sh`、`start.sh`、`docker-compose.yml`。
+- 上游新增的 `scheduler-phase` / `worker-manager-code-retry` / `farm-fertilizer-gate` / `ranch-illustrated-automation` 测试：断言的是跳过的那些实现，按「不测未同步代码」删除。
+
+**四、验证**
+
+- `pnpm build:core` / `pnpm build:web` 均通过。
+- core 测试 **1135 条全绿**、web 测试 **380 条全绿**（新增上游 yishuhuanfu 用例已并入）。
+- 合并过程踩到两次「双方都加了同一段」导致重复（`ActivityCenter.vue` 的活动页挂载与 import、`AutomationSettingsForm.vue` 的以薯换福卡片、`admin/activity-center/index.ts` 的路由注册），已逐个去重。
+
+### 2026-11-26 · v3.39.7（#273） · 完整移植 li 版以薯换福，删除本地 sweet-potato 全链路
+
+用户第三次明确要求：**不要「参考 li 版重做」，而是把 li 版的以薯换福原样搬过来，本地那一版整套删掉。**
+所以这一轮不做适配层、不做命名保留，连协议文件、接口路径、组件名、store 片段都换成 li 版原文件。
+
+**一、删除本地那一版（全部代码）**
+
+- 后端：`services/activity-center/sweet-potato.ts`、`controllers/admin/activity-center/sweet-potato-routes.ts`、`config/sweet-potato.ts`、`proto/sweet-potato.proto`、`tests/sweet-potato.test.js`。
+- 前端：`components/activity/SweetPotatoTab.vue`、`views/activity-center/SweetPotatoActivityPage.vue`、`components/activity/gameplays/sweetPotato/`、`tests/sweet-potato-activity.test.mjs`。
+- 本地额外叠在农场链路里的三处红薯逻辑一并撤掉（li 版没有这些）：
+  - `farm/planting.ts` 巡田「空地优先种红薯」整段（原来还带 `sweetPotatoPlantEmptyLands` 依赖注入）；
+  - `farm/scheduler.ts` 收获时按种植子开关排除红薯地块；
+  - `activity-automation.ts` 里 5 个 `sweet_potato_*` 任务与 `WINDOW_IDS.sweetPotato`。
+- `AccountFeatureSettings.vue` 的以薯换福卡片、`constants/activity-windows.ts` 的三个常量与两组选项、`stores/setting.ts` 的 8 个字段全部移除。
+
+**二、后端逐字移植（文件级一致）**
+
+- `core/src/proto/activitypb.proto` 并入 li 版 271 行 Yshf 协议块与 8 个 191~199 回包槽，diff 与 li 版**完全一致**；`sweet-potato.proto` 删除。
+- `utils/proto.ts` 的 `SweetPotatoGroupReply/SweetPotatoOperate*` 查找换成 li 版的 `YshfState/YshfCatalog/Yshf*Request` 一组。
+- 新增 `services/activity-center/yishuhuanfu.ts`（987 行）、`services/yishuhuanfu-auto.ts`（355 行）、`controllers/admin/activity-center/yishuhuanfu-routes.ts`（33 行）—— 三个文件与 li 版 **`diff` 为空**。
+- 接线：`activity-center.ts` 按 li 版 `createYishuHuanfuActivityService` 注入 17 个依赖并导出 11 个方法；快照 key 从 `sweetPotato` 改为 `yishuHuanfu`，`buildActivityDirectory` 增加第 10 个参数把铺子 GID 传给玩法绑定；`activity-gameplay-registry.ts` 与 li 版一致（`yishuhuanfu` / priority 90）；`data-provider.ts`、`worker.ts` 的 11 个分发分支、`worker-manager.ts` 的超时表全部改名。
+- 自动化：li 版用独立 10 分钟定时器（`startYishuTimer`，首跑 260s、相位 4min、单轮最多 3 家铺子、笔间隔 1200ms），串在 `runExclusiveAutomationTask('yishuhuanfu')` 同一把全局锁里；在 `worker.ts` 两处（登录暖机后、配置下发后）注册，与 li 版位置一致。
+- 默认值：`shared-state.ts` 用 li 版 8 个 `yishu_*` 默认值（4 个开关 + 兜底 + 3 个数值），数值夹取区间对齐 `yishuhuanfu-auto.ts` 的 `toInt`（1~50 / 5~720 / 1~10000）。
+
+**三、前端逐字移植**
+
+- `stores/activity-center.ts` 整份换成 li 版：`YishuHuanfuActivityDto` 等 5 个 DTO、`normalizeYishuHuanfu()`、余额兜底、好友扫描/记录/目录/铺子 11 个动作、6 个 pending 键，命名全部 `yishuHuanfu`。
+- `components/activity/YishuHuanfuTab.vue`（1588 行）、`views/activity-center/YishuHuanfuActivityPage.vue`（356 行）、`gameplays/yishuhuanfu/index.ts` 三份与 li 版 **`diff` 为空**。
+- `ActivityCenter.vue`、`gameplays/index.ts`、`ActivityDirectoryPage.vue`、`AutomationSettingsForm.vue` 全部换回 li 版写法（目录页保留本地「节令日历」常驻入口与 `createRequestGuard`）。
+- 接口路径随之改成 `/api/activity-center/yishuhuanfu/*`（`/catalog` `/records` `/shop` `/friends` `/sell` `/exchange` `/seed/claim` `/share` `/quote/refresh` `/commission/claim`），旧的 `/sweet-potato/*` 现在返回 404。
+
+**四、唯一保留的一处本地修复**
+
+- `store.reset()` 里补回 `pendingLoads.clear()`：li 版没有这两行，切号后同一 `accountId` 的旧 `loadDetails` Promise 会被复用，把上一个会话的数据写回快照。这是与活动方案无关的缺陷修复，`web/tests/full-review-regression.test.mjs` 也在钉它。
+
+**五、验证**
+
+- `pnpm build:core` 通过；core 测试 **1121 条全绿**（新增 li 版 3 个测试文件：`yishuhuanfu-service` / `yishuhuanfu-proto` / `yishuhuanfu-auto`）。
+- `pnpm build:web` 通过；web 测试 **373 条全绿**（新增 li 版 `yishuhuanfu-catalog-normalize` / `yishuhuanfu-records-account`）。
+- 实机接口：`/api/activity-center/yishuhuanfu`、`/catalog`、`/records`、`/shop`、`/friends` 全部 200（返回 `ACCOUNT_OFFLINE`，本机 Code 已过期需重新扫码），`/sweet-potato*` 已 404。
+- `input-surface.test.js` 的字段清单按新路由重写（`friendGid` / `count` / `index` / `limit` / `force`），服务层校验器钉在 `yishuhuanfu.ts` 上。
+
+### 2026-11-26 · v3.39.6（#272） · 以薯换福页面完全按 li 版重做
+
+用户看过上一版后反馈「还是和 li 版不一样」，明确要求完整移植 li 版方案、放弃本地那一版。
+
+**一、页面层逐字照搬 li 版（核心）**
+
+上一版保留着本地 `ActivityShell` + `ActivityHeader` 外壳和 `main.activity-content` 卡片容器，看起来仍是「带边框圆角的卡片 + 本地统一页头」。li 版这一页是特例：自绘页头（返回 / 图标 / 标题 / 剩余时间 / 福气币胶囊 / 刷新），内容直接铺开，不套任何外框。
+
+- `SweetPotatoActivityPage.vue` 按 li 版 `YishuHuanfuActivityPage.vue` 重写：模板、类名（`yshf-view*`）、样式、`headMeta` 时间格式化、目录与额度自动补齐、记录按账号重拉，逐段对齐。
+- 唯一适配：本地活动详情态由父级 `overflow: hidden` 把滚动交给页面自管（`.farm-page-content.is-activity-detail`），而 li 版页面挂在可滚动区里。给 `.yshf-view` 加 `overflow-y: auto; min-height: 0`，视觉不变。
+- 图标改回 li 版路径 `activity-assets/yishuhuanfu/icon.png`，目录页映射同步；删除本地 `activity-assets/sweet-potato/`。
+
+**二、补 `shopGid`：让「换账号重置出售目标」真正生效**
+
+Tab 里有 `watch(() => [activityId, shop.gid], ...)` 清空出售目标。但后端快照从没下发过 `shopGid`，前端归一化只能拿 `activityId` 兜底 —— 而 `activityId` 对所有账号都是 `2026111708`，换账号不会变，出售目标会残留上一个账号的好友 GID，可能把蜜薯卖进别人的铺子。
+
+- 后端 `toDto()` 增加 `shopGid: selfGid()`。
+- 前端归一化去掉 `activityId` 兜底。
+- 上一版用 `:key` 按账号重建 Tab 绕过，本版撤掉，改回 li 版机制。
+
+**三、修目录与额度并发互踢**
+
+进页面时兑换目录（cmd 97）和铺子额度（cmd 92）是并发发的，两者都递增 store 的全局 `requestVersion`，后发的会让先回的那个 `isCurrent()` 失败 —— 目录落不了地，「兑换商店」空着（要靠额度回包触发 watch 再重试一次才自愈，白打一轮请求）。
+
+- 新增 `loadSweetPotatoShop()`，与 li 版 `loadYishuHuanfuShop` 同语义：不碰 `requestVersion`、不设 pending、不动提示，只校验账号后回填额度。
+- 抽出 `applyShopQuote()` 统一落盘，行情刷新与静默查额度共用一份。
+- 页面层回到 li 版的并发写法。
+
+**四、验证**
+
+- web 380 条、core 1107 条全绿（新增 2 条：页面层不套外框、查额度不碰 `requestVersion`）。
+- 实机：`shopGid=1011388647`、164+66=230、福气币 158700、种子 16、蜜薯 0。
+- 新踩的坑：本次重启时前端正在重建（`web/dist` 正处于被移走的窗口），`fs.existsSync(webDist)` 判定失败 → `express.static` 根本没挂载，整站静态资源全被 SPA 兜底成 `index.html`（页面会白屏）。**重启服务必须等前端构建完成。**
+
+### 2026-11-26 · v3.39.5（#271） · 按 li 版设计稿重构以薯换福活动页，修复补种模块路径与面板版本号不同步
+
+按用户提供的 li 版（`qq-farm-bot-li-main`）设计稿重做以薯换福活动页，并修掉重构后暴露的三个问题。
+
+**一、页面按 li 版三层结构重构**
+
+原实现是「Tab 组件内直连 API」（`SweetPotatoTab.vue` 1012 行），li 版是「集中式 store 持状态 + 纯展示 Tab」（`YishuHuanfuActivityPage.vue` 356 行 + `YishuHuanfuTab.vue` 1588 行）。按 li 版分层移植，保留本地 `sweetPotato` 命名与后端定制接口：
+
+- 数据层 `stores/activity-center.ts`：新增 `SweetPotatoActivityDto` / `SweetPotatoCatalogEntryDto` / `SweetPotatoFriendShopDto` / `SweetPotatoRecordDto`，`normalizeSweetPotatoActivity()` 把后端扁平 DTO 映射成面板嵌套结构；新增 11 个动作与 6 个 pending 键。
+- 展示层 `components/activity/SweetPotatoTab.vue`：改为纯 props/emit，三段式切换（红薯小铺 / 兑换商店 / 好友比价）、大字收购价 + 刷新行情、接收额度进度条、每日动作、小铺提成 + 收购记录、出售面板、兑换数量弹窗、活动规则。
+- 页面层 `views/activity-center/SweetPotatoActivityPage.vue`：43 → 185 行，负责取数与事件绑定。外壳用本地 `ActivityShell` + `ActivityHeader`（本地 `.activity-content` 是绝对定位，脱离 shell 会破版），Tab 加 `:key` 按账号重建（本地快照不带铺主 GID，换账号时会卖到上一个账号的铺子）。
+- 资源：新增 `web/public/activity-assets/sweet-potato/icon.png`（取自 li 版），并在 `ActivityDirectoryPage.vue` 的 `activityIconSrc()` 补上分支，否则活动目录卡片无图。
+- 后端 `toDto()` 增加 `icons` 字段，前端不再硬编码道具图路径。
+
+顺带修掉重构中发现的三个数据缺陷：`rules` 后端是字符串数组、通用 `normalizeRules()` 只认 `{ paragraphs }` 导致活动说明整块不显示（新增 `normalizeSweetPotatoRules()`）；`capacity` 是累计接收总量（实机 14024）不能当每日额度（8000）的分母（改为初值留空、由 cmd 92 回包补）；目录页图标缺失。
+
+**二、红薯补种 `MODULE_NOT_FOUND`（面板日志「红薯补种暂停：Cannot find module './farm/planting'」）**
+
+同类事故第三次：`sweet-potato.ts` 在 `services/activity-center/` 子目录，`require('./farm/planting')` 会去找不存在的 `services/activity-center/farm/planting`。这条路径只在**真正有空地要补种**时才执行，所以服务启动、快照、行情全都正常，只有巡田到补种那一步才炸，表现为整轮补种被跳过。
+
+- 三处路径改成 `'../farm/planting'`、`'../farm/api'`、`'../farm/land-analysis'`。
+- `activity-center.ts` 实例化时用 getter 显式注入 `plantSeeds` / `farm` / `analyzeLands`，不再依赖子目录懒加载（getter 惰性 require，因为 `farm/planting.ts` 里又有对 `activity-center` 的反向懒加载，顶层立即 require 会把加载顺序绑死）。
+- 新增 2 条回归测试：用 `require.cache` 顶掉 `farm/planting` 假实现，命中缓存即说明 `require('../farm/planting')` 解析正确，写成 `./farm/*` 会直接 `MODULE_NOT_FOUND`；另一条覆盖 `runCropCycle` 的收 + 砍 + 补全链路。
+- 以编译产物为基准验证：`createRequire(core/dist/services/activity-center/sweet-potato.js)` 解析 `../farm/planting`、`../farm/api`、`../farm/land-analysis` 三个全部命中，而 `./farm/planting` 确认 `MODULE_NOT_FOUND`。
+
+**三、面板版本号不同步**
+
+侧边栏与登录页的版本号来自 vite `define` 烘焙的 `__APP_VERSION_LABEL__`，只有 `pnpm build:web` 才更新；而提交钩子每次提交都会 bump `version.json`。结果是改完代码提交、后端也重启了，面板上还挂着上一版，看着像改动没生效。
+
+- 后端新增免鉴权 `GET /api/version`：读**仓库根** `version.json`（`readRepoVersion()` 带 mtime 缓存），按「源码部署 → 容器」的顺序试候选目录（容器里没有 `.git`，只向上找 git 根会落到 `core/` 上），响应加 `no-store`。
+- `Sidebar.vue` 与 `Login.vue` 的版本号改成 `ref`，构建期常量只作首屏兜底，挂载后向 `/api/version` 取真值覆盖；请求失败保持常量，不清空。
+- 新增 `core/tests/repo-version.test.js` 4 条（真源读取、mtime 缓存失效、坏文件返回 null、无次数时不显示「第 0 次」），`admin-route-safety.test.js` 与 `web/tests/version.test.mjs` 各补接线断言。
+
+**验证**：core 1100 → 1107 条、web 377 → 378 条全绿；`pnpm build:web` 成功（ActivityCenter 320.23 kB），产物含 `/api/version` 调用（`DefaultLayout-*.js` 与 `Login-*.js`）；实机 `/api/version` 返回 `{"version":"3.39.3","build":270,"label":"v3.39.3 · 第 270 次更新"}`；活动自动化跑完一轮，日志不再出现「红薯补种暂停」。
+
+> **构建坑（新增）**：`web/dist` 文件数超过 50 时，即使 `dangerouslyDisableSandbox` 也会被 safe-delete 的批量删除保护拦住（`SAFE_DELETE_BULK_CONFIRM_REQUIRED`），vite 清空 `dist` 直接失败。解法是先把 `dist` 移到 `dist.old.<ts>`（`.gitignore` 已覆盖），再构建，最后删旧目录。
+
+### 2026-11-26 · v3.39.3（#270） · 修复以薯换福 friendsOf 未 await 异步好友列表
+
+比价扫描 `GET /api/activity-center/sweet-potato/scan` 在生产环境一点就报「活动操作失败，请刷新页面后重试」，真实原因是 `TypeError: list is not iterable`。
+
+根因在 `friendsOf()`：它把 `getFriendsList()` 当成同步函数直接 `for...of` 遍历，但生产环境取好友是**异步**的——`require('../friend').getFriendsList()` 返回 `Promise`，遍历 Promise 必然抛 `list is not iterable`，让比价、出售、按好友铺子出售整条链路不可用。v3.39.0 移植时 `getFriends` 并未注入到 `createSweetPotatoService` 的 deps 里，所以生产环境总是走这条异步分支；而测试里注入的是**同步**的 `getFriends`，因此全绿却没拦住这个回归。
+
+- `friendsOf()` 改为 `async`，对 `deps.getFriends()` 与 `require('../friend').getFriendsList()` 两处都 `await`；三个调用点（`getSweetPotatoShops` 分页、`scanNow` 比价、`mutate` 按 owner 找好友）同步改为 `await friendsOf()`。`await` 同步值也安全，测试注入的同步 `getFriends` 不受影响。
+- `error-handler.ts` 增加兜底诊断：当错误既无 `code` 又不含 `code=数字` 时，把原始消息、`name`、堆栈打到服务日志，避免未知错误被笼统的「活动操作失败，请刷新页面后重试」吞掉。这次的 `list is not iterable` 就是靠这条诊断定位到的。
+- `core/tests/sweet-potato.test.js` 34 → 35 条：新增「异步好友列表也能正常遍历」，注入返回 Promise 的 `getFriends`，断言 `scanShops` 能扫到自家+好友。已验证移除 `await` 后该用例精确报 `list is not iterable`，能拦住回归。
+- 实测 `scan?limit=3&force=1` 返回 `scanned=3、failed=1、最高价 218、自家价 230`；二次扫描命中 3 分钟缓存（`cached=true`）；`/quote/refresh` 仍返回真实行情。core 1100 条、web 374 条全绿。
+
+### 2026-11-26 · v3.39.2（#269） · 修复以薯换福 selfGid 懒加载 require 路径错误
+
+v3.39.0 新增的「刷新我的行情」接口上线后一点就报「活动操作失败，请刷新页面后重试」，错误码 `MODULE_NOT_FOUND`。根因是 `sweet-potato.ts` 放在 `services/activity-center/` 子目录里，`selfGid()` 的懒加载回退路径写成了 `require('../utils/network')`——从该文件出发会解析到并不存在的 `services/utils/network`。
+
+这条 fallback 平时走不到：`getSweetPotatoActivity` 等主路径在测试与生产里都由 `deps.getUserState` 注入，只有新增的 `refreshSweetPotatoQuote()` 在部分调用面里没拿到注入值，才第一次真正执行到懒加载分支。而抛出的 `MODULE_NOT_FOUND` 又被 `error-handler.ts` 当成协议错误码原样透出（`error.code` 直接当 `protocolCode`），前端只看到一句笼统的「活动操作失败」，真实原因完全不可见。
+
+- `sweet-potato.ts` 的懒加载路径改成 `require('../../utils/network')`。
+- `activity-center.ts` 实例化时**显式注入 `getUserState`**，不再依赖子目录里的懒加载路径。这层路径写错只会在调用时炸，主流程很难提前发现，注入是最省事的止损。
+- `core/tests/sweet-potato.test.js` 33 → 34 条：新增一条「不注入 `getUserState` 时懒加载路径可解析」，断言抛出的错不是 `MODULE_NOT_FOUND` / `Cannot find module`。原有用例都注入了 `getUserState`，所以此前没能拦住这个回归。
+- 实测 `POST /api/activity-center/sweet-potato/quote/refresh` 返回真实行情（今日收购价 230 = 基础 164 + 暴击 66，今日还可收 8000，`canSell=true`）。core 1099 条全绿。
+- **顺带发现的运行环境问题**：重启服务时 QQ 账号「神拽」用 `1.17.1.10_20261117` 连接被网关回 400（`Unexpected server response: 400`），与 v3.39.0 风险提示一致。微信账号「神拽°」正常登录。QQ 端如需回退版本号，见 v3.39.0 记录里的回退说明。
+
+### 2026-11-25 · v3.39.1（#268） · 修复分享确认失败后冷却结束会重发 cmd 98
+
+上一版把分享改成「先 cmd 98 再上报」时，把「今天已分享」的判定写成了 `share_claimed && pendingShareDate !== 今天`。这个条件在**确认那一步出岔子**时会失效：`rpc('share')` 已经把 `pendingShareDate` 记成今天，紧接着 `GetGroup` 确认失败抛错，冷却 300 秒结束后再点分享，判定被绕过，会朝服务端发第二次 cmd 98——而这是一条写请求，不能重发。
+
+- 判定改成 `claims.share_claimed || pendingShareDate === 今天`：服务端标记是权威判据，本地记账是兜底，任一成立就返回「今日分享暴击已触发」，不再发写请求。
+- 成功路径不再把 `pendingShareDate` 清空，记账保留到当天结束；跨天自然失效。
+- 自动分享 `autoShare()` 的前置判断同步改成同一条件，避免自动侧重复进入。
+- `core/tests/sweet-potato.test.js` 32 → 33 条（分享成功后再调一次，cmd 98 计数仍为 1）。core 1098 条全绿。
+
+### 2026-11-25 · v3.39.0（#267） · 移植 li 版以薯换福运行时方案，同步协议与游戏客户端版本
+
+按 `muyuewang/qq-farm-bot-li` 把以薯换福剩下没搬的运行方案补齐。前端界面、后端服务、六个开关与四个参数本地早就有了，这次搬的是「跑起来更稳」的四件事，外加协议与客户端版本对齐。
+
+- **余额快照改成非阻塞**：活动快照以前在 `getSweetPotatoActivity()` 里 `await` 背包，而网关的 `Bag` 排在活动请求之后，并发一满就被挤掉；页面挂载与轮询还会并发打两个快照，后一个失败就覆盖前一个的成功结果，表现是「刚刷新有数字、几秒后整排变 0」。现在拆成两条通道——`refreshBalances()` 单飞打网关（同一时刻只一个在途，最坏重试 250/700ms），`currentBalances()` 同步读内存供快照使用。两级兜底：10 秒内直接复用；读失败但手里有 10 分钟内的成功值就继续用并标 `balanceStale`；连一次成功值都没有才下发 `balancesKnown=false`。进程启动 1.2 秒后预热一次；写操作成功后 `invalidateBalanceCache()` 后台重读，回填快照用 `freshBalances: true` 等真值。余额未知时不再把「卖不了」当事实（`actions.sell.enabled` 保持 true）。
+- **分享改成先分享后上报**：之前把 `CheckCanShare` 当门闸放在最前面，入口临时不可用就白丢当天分享。现在顺序与官方客户端一致：`Operate(cmd=98)` → `CheckCanShare` → `ReportShare{28,2017}`，后两步整段尽力而为，抛出或 `can_share=false` 只记 `shareReportError`，接口把 `shareReported` / `shareReportError` 一起透出，面板用警示样式提示「铺子已分享，但暴击上报未确认」。只有 `claims.share_claimed` 确认不了才按结果不明处理。
+- **新增刷新行情接口**：`POST /api/activity-center/sweet-potato/quote/refresh` 走 cmd 92 只查自己，拿剩余接收额度（状态槽里没有这一项）。面板工具条加「刷新我的行情」，结果写进「剩余收购量」的提示位并同步比价表里自己那一行；自家铺子行改显示服务端下发的「还可收 N（自家不限出售）」。
+- **面板比价 3 分钟缓存**：`GET /scan` 支持 `force`，3 分钟内复用上一次结果并标记 `cached`，前端文案说明「点重新比价强制重扫」；「重新比价」按钮自动带 `force=1`。自动卖薯那份按配置间隔的缓存独立保留，两者互不顶掉节奏，成交或刷新行情时同时作废。`force` 已登记 `INPUT_SURFACE`。
+- **协议对齐**：`SweetPotatoState` 补 4 号子槽 `actions`（实机只保留最近一次动作，不能用来判断今天是否已领）；`SweetPotatoShareReply` 字段号按 li 版改正为 `grant=1 / price=2 / field_3 / shop=4{share_key=2} / field_5 / field_6`（旧版把 2/3 写成 `bonus_price`/`price`、4 号当 bytes 分享凭证，因为从没读过所以一直没暴露）。兑换目录归一化补 `itemIdMatched`。
+- **参数显式夹取**：`sweet_potato_scan_friend_limit` / `sweet_potato_scan_interval_minutes` / `sweet_potato_sell_min_count` 在 `cloneAccountConfig` 里夹到 1–100 / 5–720 / 1–9999。默认值是数字，前端可能传字符串甚至布尔，不夹取的话「每轮扫几家」会退化成 1、比价间隔变成 0（等于每轮全量扫好友）。
+- **游戏客户端版本同步**：QQ 与微信两端统一到 `1.17.1.10_20261117`（`updatedAt` `1795596035361`）。旧基线是 QQ `1.17.0.3` / 微信 `1.17.0.6`，两轮旧抓包的结论；li 版 2026-11-25 抓包确认两端都是 1.17.1.10。已保存的旧版本号不用手动改，`resolveClientVersion` 只认 `updatedAt` 更大的值。
+- **验证**：`core/tests/sweet-potato.test.js` 22 → 32 条（分享三条失败分支、快照不 await 背包与 stale 回退、余额未知不禁用出售、比价缓存与 force、刷新行情、`itemIdMatched`、参数夹取、状态槽 4 与分享回包字段号），`web/tests/sweet-potato-activity.test.mjs` 7 → 8 条。core 1097 条、web 374 条全绿，`vue-tsc`、`eslint --max-warnings=0`（前后端）、`pnpm build` 通过。
+- **风险提示**：客户端版本号是对齐 li 版抓包的结论，本地没有实机复验；若 QQ 端连上即被回「Code 或版本不符」（关闭码 400），把 `core/src/config/config.ts` 的 `DEFAULT_CLIENT_VERSION` 改回 `1.17.0.3_20261117`、`updatedAt` 改回 `1794795016627` 即可回退，微信那对常量不受影响。细节见 `docs/sweet-potato.md`。
+
+### 2026-11-25 · v3.38.0（#266） · 新增以薯换福收购记录与自动比价卖薯，补齐上一轮遗留项
+
+上一轮按 li 分支抓包修正了协议，但还有两项明确没做：收购记录（cmd 95）与自动卖薯的比价策略。这次一起补完。
+
+- **收购记录（cmd 95）**：proto 补 `SweetPotatoPurchaseRecord`（实机字段 1 时间戳 / 2 卖家 gid / 3 数量 / 4 付给卖家总额 / 6 昵称 / 7 头像 / 8 等级 / 9 提成）与 `records` selector（field 195）。服务层 `getSweetPotatoRecords()` 按时间倒序取最近 30 条，汇总 `totalCommission` / `totalIncome`。没记录时服务端可能只回空包，所以这条只读接口单独放行「空回包」，不套写操作的 `activity.state` 校验。
+- **自动卖薯改成比价贪心**：新增 `scanShops()`（cmd 92 逐个读，并发 4，含自家铺子但排最后，按成交价降序 → 余量降序）。`autoSell()` 从最高价开始卖，一家额度吃满换下一家，单轮最多 3 家、笔间隔 1200ms，好友都收满时按开关兜底卖自己；额度不足 / 停收 / 价格变了只换下一家，回包对不上整轮停手。比价结果按配置间隔节流，本轮有成交就清缓存。
+- **四个可调参数**：`sweet_potato_scan_friend_limit`（20）、`sweet_potato_scan_interval_minutes`（30）、`sweet_potato_sell_min_count`（1）、`sweet_potato_sell_fallback_own`（true），落在 `SWEET_POTATO_DEFAULTS`，设置页开启「自动出售」后展开。前端 `SWEET_POTATO_SELL_FIELDS` 的兜底值与后端逐项比对。
+- **面板与前端**：新增 `GET /scan?limit=`（一键比价）与 `GET /records`（收购记录）；活动页的铺子列表分「分页查询 / 一键比价」两种模式，新增收购记录面板（分红明细与时间）；`limit` 已登记 `INPUT_SURFACE`，provider / worker / 超时表同步补齐。
+- **验证**：`core/tests/sweet-potato.test.js` 17 → 22 条（比价降序与单轮 3 家、兜底开关、最低数量、回包价格不符停手、记录倒序汇总、空回包、cmd 95 selector），`web/tests/sweet-potato-activity.test.mjs` 6 → 7 条。core 1087 条、web 373 条全绿，`vue-tsc`、`eslint --max-warnings=0`（前后端）、`pnpm build` 通过。
+- **仍未实服验证**：cmd 95 / 96 / 99 与好友铺子真实成交都只用假网关验证过风控分支，首次使用请手动点一次核对余额。细节见 `docs/sweet-potato.md`。
+
+### 2026-11-25 · v3.37.1（#265） · 修复以薯换福兑换协议与自家铺子额度，补上提成领取
+
+对着 `muyuewang/qq-farm-bot-li`（同上游的下游分支）的实机抓包复核上一版实现，发现三处协议错、两处功能缺。抓包证据很硬：兑换后余额链 69120 → 62120 → 27120、出售价 111 + 33 = 144 与 99 + 66 = 165、提成 86 领取后状态槽消失。
+
+- **兑换商店走错了通道**：上一版复用通用 `ExchangeShopRequest{activity_id: 2026111709, operate_type: 1}`，但副模块 `2026111709` 在实机抓包里 field 117 **始终为空**，真正的兑换挂在主活动上——cmd 97 查目录（`catalog.goods[]`）、cmd 96 下单（`{index, count}`）。已改为走 `Operate`，并删掉对 2026111709 的协议依赖（ID 只留给活动目录识别）。目录只下发序号/价格/状态/限购，`item_id` 与名称按客户端静态表（10 档）映射，价格对不上时一律不显示名字，避免展示错商品。
+- **`can_sell` 从没读过**：`SweetPotatoShopReply.field_2` 原本声明成 int64 且没用。它是 bool `can_sell`（官方 `MapleMarketGetShopRsp`：shop=1、can_sell=2），三态是「true 可收 / false 明确拒收 / 回包没字段按可卖」。protobufjs 不给缺失字段补默认值，所以用 `hasOwnProperty` 判「明确 false」；停收的铺子现在直接抛 `SWEET_POTATO_SHOP_CLOSED` 换一家，不再白跑一次失败。
+- **自家铺子被额度校验卡死**：`remaining` 对自家铺子是「不限」（不占好友额度），上一版对 self 和好友一视同仁，`remaining` 为 0 时「一键卖自己」会被自己的校验永久拦住。现在 `queryShop` 对自家返回 `unlimited: true` + `remaining: null`，本地跳过额度校验。
+- **出售回包 field 4 不是剩余量**：它是该铺每日额度**上限**（实机 8000）。上一版直接拿它覆盖 `remaining`，会把「还能收多少」写成 8000。现在按成交数自己递减。
+- **补上提成领取**：状态槽 `130.11` 是待领收购提成、`13` 是标志位，cmd 99 领取后字段消失、福气币增加。新增 `sweet_potato_commission` 开关（默认开）、活动自动化 op 与面板按钮；没提成时不发写请求。
+- **前端**：指标从四格变五格（加待领提成）、主操作加「领取提成」、铺子行显示「还可收 不限」并把停收的置灰、兑换面板改成序号 + 单价 + 限购 + 数量输入；`≤1180px` 三列。
+- **顺手修掉一个既有 lint 错误**：`activity-center.ts` 里 `sweetPotatoService` 在 `buildActivityCenterSnapshot` 之后才实例化（tdz 风险 + `no-use-before-define`），把它提到快照函数之前。
+- **验证**：`core/tests/sweet-potato.test.js` 8 → 17 条（新增 can_sell 三态、自家 remaining=0、额度递减、提成领取、目录归一化、兑换限购与余额拦截），`web/tests/sweet-potato-activity.test.mjs` 5 → 6 条。core 1082 条、web 372 条全绿，`vue-tsc`、`eslint --max-warnings=0`（前后端）、`pnpm build` 通过。
+- **仍未接入**：收购记录（cmd 95）只是展示用，本轮没做。cmd 96/99 只有假网关验证，首次使用请手动点一次核对余额。细节见 `docs/sweet-potato.md`。
 
 ### 2026-11-25 · v3.37.0（#263） · 新增以薯换福完整闭环：种植、出售、分享与兑换商店
 

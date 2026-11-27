@@ -9,12 +9,14 @@ import RunLogCard from '@/components/RunLogCard.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import { getPlatformLabel, useAccountStore } from '@/stores/account'
 import { useBagStore } from '@/stores/bag'
+import { useIllustratedStore } from '@/stores/illustrated'
 import { useStatusStore } from '@/stores/status'
 import { partitionOperations } from '@/utils/dashboard-operations'
 
 const statusStore = useStatusStore()
 const accountStore = useAccountStore()
 const bagStore = useBagStore()
+const illustratedStore = useIllustratedStore()
 const {
   status,
   diamondBalance,
@@ -23,6 +25,7 @@ const {
 const { currentAccountId, currentAccount } = storeToRefs(accountStore)
 const isOnline = computed(() => !!currentAccount.value?.running && status.value?.connection?.connected === true)
 const { dashboardItems } = storeToRefs(bagStore)
+const { data: illustratedData } = storeToRefs(illustratedStore)
 const lastBagFetchAt = ref(0)
 
 const displayName = computed(() => {
@@ -75,8 +78,16 @@ const expRate = computed(() => {
 // Fertilizer & Collection
 const fertilizerNormal = computed(() => dashboardItems.value.find((i: any) => Number(i.id) === 1011))
 const fertilizerOrganic = computed(() => dashboardItems.value.find((i: any) => Number(i.id) === 1012))
-const collectionNormal = computed(() => dashboardItems.value.find((i: any) => Number(i.id) === 3001))
-const collectionRare = computed(() => dashboardItems.value.find((i: any) => Number(i.id) === 3002))
+// 库存里的图鉴改用「已解锁 / 总条目」口径，与图鉴页面完全一致：
+// 作物图鉴对应 /api/illustrated 的 crop，超变图鉴对应 mutant。
+function illustratedFraction(book: any): string {
+  const items: any[] = Array.isArray(book?.items) ? book.items : []
+  if (!items.length)
+    return '—'
+  return `${items.filter(item => item.unlocked === true).length}/${items.length}`
+}
+const cropIllustratedFraction = computed(() => illustratedFraction(illustratedData.value?.crop))
+const mutantIllustratedFraction = computed(() => illustratedFraction(illustratedData.value?.mutant))
 
 function formatBucketTime(item: any) {
   if (!item)
@@ -437,6 +448,19 @@ async function refreshBag(force = false) {
   await bagStore.fetchBag(currentAccountId.value)
 }
 
+// 图鉴解锁数每天变化很小，10 秒一次的 refresh 里按 60 秒节流，避免反复打两个重接口。
+let lastIllustratedFetchAt = 0
+async function refreshIllustrated(force = false) {
+  const id = currentAccountId.value
+  if (!id || !currentAccount.value?.running || !status.value?.connection?.connected)
+    return
+  const now = Date.now()
+  if (!force && now - lastIllustratedFetchAt < 60000)
+    return
+  lastIllustratedFetchAt = now
+  await illustratedStore.fetch(String(id))
+}
+
 async function refreshDiamond() {
   if (!currentAccountId.value || !currentAccount.value?.running)
     return
@@ -459,6 +483,7 @@ async function refresh() {
     // 日志由 RunLogPanel 自己按筛选条件拉取并轮询，这里只管状态与背包。
     // 仅在账号已运行且连接就绪后拉背包，避免启动阶段触发500
     await refreshBag()
+    await refreshIllustrated()
   }
 }
 
@@ -640,12 +665,12 @@ useIntervalFn(updateCountdowns, 1000)
             <strong class="ov-tile__value">{{ formatBucketTime(fertilizerOrganic) }}</strong>
           </div>
           <div class="ov-tile">
-            <span class="ov-tile__label"><span class="i-fas-bookmark text-violet-400" />普通收藏点</span>
-            <strong class="ov-tile__value">{{ formatPlainNumber(collectionNormal?.count) }}</strong>
+            <span class="ov-tile__label"><span class="i-fas-bookmark text-violet-400" />作物图鉴</span>
+            <strong class="ov-tile__value">{{ cropIllustratedFraction }}</strong>
           </div>
           <div class="ov-tile">
-            <span class="ov-tile__label"><span class="i-fas-gem text-violet-400" />典藏收藏点</span>
-            <strong class="ov-tile__value">{{ formatPlainNumber(collectionRare?.count) }}</strong>
+            <span class="ov-tile__label"><span class="i-fas-gem text-violet-400" />超变图鉴</span>
+            <strong class="ov-tile__value">{{ mutantIllustratedFraction }}</strong>
           </div>
         </div>
       </section>

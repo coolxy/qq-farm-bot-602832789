@@ -65,6 +65,9 @@ test('助手脚本守住几条硬边界', () => {
   assert.match(agent, /跳过重建/, '代码没变时不该白重建一次镜像')
   assert.match(agent, /write_heartbeat/, '心跳是应用判断「能不能一键更新」的唯一依据')
   assert.match(agent, /while kill -0 "\$build_pid"/, '构建期间也要持续写心跳，否则面板会把进行中的作业判死')
+  assert.match(agent, /http\.version=HTTP\/1\.1/, 'HTTP/2 长连接在部分代理/NAT 下会被静默掐断，要强制 HTTP/1.1')
+  assert.match(agent, /PULL_MAX_ATTEMPTS/, '拉取要能重试，偶发 TLS 抖动不该让整次更新失败')
+  assert.match(agent, /pull_failure_hint/, '失败原因要按日志实况给出，不能只甩「常见原因」')
 
   // 危险动作：这些都是「删数据」级别的，脚本里一条都不能有
   const code = agent.split('\n').filter(line => !line.trimStart().startsWith('#')).join('\n')
@@ -212,13 +215,71 @@ esac
 `, 'utf8')
     chmodSync(join(root, 'bin', 'git'), 0o755)
     writeRequest(root, 'docker_test0003')
-    runAgent(root, { UPDATE_COMPOSE_PROJECT: 'qq-farm-bot' })
+    runAgent(root, { UPDATE_COMPOSE_PROJECT: 'qq-farm-bot', UPDATE_PULL_ATTEMPTS: '1' })
 
     const job = readJob(root)
     assert.equal(job.status, 'failed')
     assert.match(job.phase, /拉取代码失败/)
-    assert.match(job.error, /git pull --ff-only 失败/)
+    assert.match(job.error, /本地有未提交改动/, '失败文案要按日志实况点名，而不是泛泛的「常见原因」')
     assert.ok(!job.recentLines.some(line => line.includes('compose up')), '拉取失败就不该往下重建')
+  }
+  finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('助手真跑一轮：TLS 抖动的前两次失败后，第三次拉取成功', { skip: skipShell }, () => {
+  const root = makeSandbox()
+  try {
+    // 前两次模拟 NAS 现场的 SSL_ERROR_SYSCALL，第三次放过 —— 验证重试真的会再试。
+    writeFileSync(join(root, 'bin', 'git'), `#!/bin/sh
+DIR="$(dirname "$0")/.."
+case "$*" in
+  *"rev-parse --short"*) if [ -f "$DIR/state" ]; then echo "def5678"; else echo "abc1234"; fi ;;
+  *"pull --ff-only"*)
+    n=$(cat "$DIR/pull_count" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$DIR/pull_count"
+    if [ "$n" -lt 3 ]; then
+      echo "fatal: unable to access 'https://github.com/602832789/qq-farm-bot.git/': OpenSSL SSL_read: SSL_ERROR_SYSCALL, errno 0"
+      exit 1
+    fi
+    echo "Updating abc1234..def5678"; : > "$DIR/state" ;;
+  *"diff --name-only"*) echo "README.md" ;;
+  *) exit 0 ;;
+esac
+`, 'utf8')
+    chmodSync(join(root, 'bin', 'git'), 0o755)
+    writeRequest(root, 'docker_test0004')
+    runAgent(root, { UPDATE_COMPOSE_PROJECT: 'qq-farm-bot', UPDATE_PULL_RETRY_DELAY: '0' })
+
+    const job = readJob(root)
+    assert.equal(job.status, 'succeeded')
+    assert.equal(readFileSync(join(root, 'pull_count'), 'utf8').trim(), '3', '应当正好试到第 3 次')
+    assert.ok(job.recentLines.some(line => line.includes('第 3 次拉取成功')), '重试成功要留痕')
+    assert.ok(job.recentLines.some(line => line.includes('2/3 次拉取失败')), '每次失败都要记一笔')
+  }
+  finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('助手真跑一轮：SSL 一直失败时把网络原因写进作业', { skip: skipShell }, () => {
+  const root = makeSandbox()
+  try {
+    writeFileSync(join(root, 'bin', 'git'), `#!/bin/sh
+case "$*" in
+  *"rev-parse --short"*) echo "abc1234" ;;
+  *"pull --ff-only"*) echo "fatal: unable to access 'https://github.com/602832789/qq-farm-bot.git/': OpenSSL SSL_read: SSL_ERROR_SYSCALL, errno 0"; exit 1 ;;
+  *) exit 0 ;;
+esac
+`, 'utf8')
+    chmodSync(join(root, 'bin', 'git'), 0o755)
+    writeRequest(root, 'docker_test0005')
+    runAgent(root, { UPDATE_COMPOSE_PROJECT: 'qq-farm-bot', UPDATE_PULL_ATTEMPTS: '2', UPDATE_PULL_RETRY_DELAY: '0' })
+
+    const job = readJob(root)
+    assert.equal(job.status, 'failed')
+    assert.match(job.error, /TLS 连接被中断/, 'SSL 失败要点名网络，不要甩给「本地有未提交改动」')
+    assert.match(job.error, /HTTP\/1\.1/, '顺带告诉用户已按 HTTP/1.1 重试过')
   }
   finally {
     rmSync(root, { recursive: true, force: true })

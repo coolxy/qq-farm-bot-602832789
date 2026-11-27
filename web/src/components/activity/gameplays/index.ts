@@ -5,21 +5,21 @@ import { petGameplay } from './pet'
 import { qingMeiGameplay } from './qingmei'
 import { qixiGameplay } from './qixi'
 import { stellarGameplay } from './stellar'
-import { sweetPotatoGameplay } from './sweetPotato'
 import { weatherGameplay } from './weather'
+import { yishuHuanfuGameplay } from './yishuhuanfu'
 
 const gameplayModules: Record<ActivityGameplayKey, ActivityGameplayModule> = {
+  muge: { key: 'muge', defaultTab: 'muge', tabs: ['muge'] },
   pet: petGameplay,
   wish: { key: 'wish', defaultTab: 'wish', tabs: ['wish'] },
   milk: { key: 'milk', defaultTab: 'milk', tabs: ['milk'] },
-  muge: { key: 'muge', defaultTab: 'muge', tabs: ['muge'] },
   happy: { key: 'happy', defaultTab: 'happy', tabs: ['happy'] },
   stellar: stellarGameplay,
   qixi: qixiGameplay,
   qingmei: qingMeiGameplay,
   charity: charityGameplay,
   weather: weatherGameplay,
-  sweetPotato: sweetPotatoGameplay,
+  yishuhuanfu: yishuHuanfuGameplay,
 }
 
 function inferGameplayKey(activity: ActivityDirectoryItemDto): ActivityGameplayKey | null {
@@ -37,9 +37,9 @@ function inferGameplayKey(activity: ActivityDirectoryItemDto): ActivityGameplayK
     return 'qixi'
   if (activity.detailTarget === 'qingmei')
     return 'qingmei'
-  if (activity.detailTarget === 'sweetPotato')
-    return 'sweetPotato'
-  if (activity.detailTarget)
+  if (activity.detailTarget === 'yishuhuanfu')
+    return 'yishuhuanfu'
+  if (activity.detailTarget === 'travel' || activity.detailTarget === 'constellation' || activity.detailTarget === 'shop' || activity.detailTarget === 'solar')
     return 'stellar'
 
   const activityIds = new Set(activity.activityIds.map(id => id.trim()))
@@ -51,10 +51,10 @@ function inferGameplayKey(activity: ActivityDirectoryItemDto): ActivityGameplayK
     return 'qixi'
   if (['2026081200', '2026081201', '2026081202'].some(id => activityIds.has(id)))
     return 'qingmei'
-  if (['2026111707', '2026111708', '2026111709'].some(id => activityIds.has(id)))
-    return 'sweetPotato'
   if (['2026090900', '2026090901'].some(id => activityIds.has(id)))
     return 'charity'
+  if (['2026111707', '2026111708', '2026111709'].some(id => activityIds.has(id)))
+    return 'yishuhuanfu'
 
   const name = activity.name.trim()
   if (name.includes('雨落成诗'))
@@ -65,8 +65,8 @@ function inferGameplayKey(activity: ActivityDirectoryItemDto): ActivityGameplayK
     return 'qingmei'
   if (name.includes('公益小红花'))
     return 'charity'
-  if (name.includes('以薯换福') || name.includes('红薯'))
-    return 'sweetPotato'
+  if (name.includes('以薯换福'))
+    return 'yishuhuanfu'
   if (/千星|星砂|星宿|节令/.test(name))
     return 'stellar'
   return null

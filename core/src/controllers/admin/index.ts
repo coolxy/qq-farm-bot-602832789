@@ -22,6 +22,7 @@ const { mountActivityCenterRoutes } = require('./activity-center-routes');
 const { mountCommerceRoutes } = require('./commerce-routes');
 const { mountCareerRoutes } = require('./career-routes');
 const { mountPanelNotificationRoutes } = require('./panel-notification-routes');
+const { mountDebugRoutes } = require('./debug-routes');
 const { mountSystemUpdateRoutes } = require('./system-update-routes');
 const { createSystemUpdateService } = require('../../services/system-update');
 const { mountWxLoginRoutes } = require('./wx-login-routes');
@@ -152,6 +153,7 @@ function startAdminServer(dataProvider: any): void {
     mountCommerceRoutes(app, ctx);
     mountCareerRoutes(app, ctx);
     mountPanelNotificationRoutes(app, ctx);
+    mountDebugRoutes(app, ctx);
     mountSystemUpdateRoutes(app, ctx);
 
     // SPA fallback

@@ -85,11 +85,33 @@ export interface AutomationConfig {
   qingmei_seed_claim?: boolean
   qingmei_wine_brew?: boolean
   // 以薯换福
-  sweet_potato?: boolean
-  sweet_potato_claim?: boolean
-  sweet_potato_plant?: boolean
-  sweet_potato_sell?: boolean
-  sweet_potato_share?: boolean
+  /** 总开关：关掉之后整个自动任务不跑。 */
+  yishu_enabled?: boolean
+  yishu_claim_seed?: boolean
+  yishu_share?: boolean
+  yishu_auto_sell?: boolean
+  yishu_claim_commission?: boolean
+  /** 两次领取提成之间的最小间隔（小时）。 */
+  yishu_commission_interval_hours?: number
+  /** 定时比较好友收购价；关掉后只卖自己铺子。 */
+  yishu_scan_enabled?: boolean
+  yishu_sell_fallback_own?: boolean
+  yishu_scan_friend_limit?: number
+  /** 两次比价之间的最小间隔（小时）。 */
+  yishu_scan_interval_hours?: number
+  /** 旧字段（分钟），仅兼容旧数据，界面不再展示。 */
+  yishu_scan_interval_minutes?: number
+  yishu_sell_min_count?: number
+  /** 好友收购价至少要高于自家这么多才卖。 */
+  yishu_sell_min_gain?: number
+  /** 卖薯时留在背包里的数量。 */
+  yishu_sell_keep_count?: number
+  /** 到点之后才开始卖薯（"HH:MM"，空串 = 不限时段） */
+  yishu_sell_after_time?: string
+  /** 高价立即卖出：扫到成交价 >= 阈值时忽略出售时间闸门直接卖。 */
+  yishu_quick_sell_enabled?: boolean
+  /** 触发高价立即卖出的成交价阈值（福气币/个），默认 500。 */
+  yishu_quick_sell_price?: number
   // 七夕
   qixi_dew_use?: boolean
   qixi_bridge_build?: boolean

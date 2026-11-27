@@ -195,7 +195,26 @@ watch(sidebarOpen, async (open) => {
 })
 watch(desktop, () => appStore.closeSidebar())
 
-const versionLabel = __APP_VERSION_LABEL__
+/**
+ * 面板版本号：构建期常量只作首屏兜底，拿到 `/api/version` 后以服务端为准。
+ *
+ * `__APP_VERSION_LABEL__` 是 vite `define` 烘焙进来的，只有 `pnpm build:web` 才会变；
+ * 而提交钩子每次提交都会 bump 版本号。只显示构建常量的话，改完代码提交、后端也重启了，
+ * 面板上还挂着旧版本号，看着像改动没生效——所以运行时再问一次服务端。
+ */
+const versionLabel = ref(__APP_VERSION_LABEL__)
+
+async function loadVersionLabel() {
+  try {
+    const res = await api.get('/api/version')
+    const label = String(res.data?.data?.label || '').trim()
+    if (label) versionLabel.value = label
+  }
+  catch {
+    // 服务暂时不可达就保持构建期常量，不要因此把版本号整行清空。
+  }
+}
+onMounted(() => { void loadVersionLabel() })
 
 watch(
   () => route.path,
@@ -232,14 +251,6 @@ watch(
           {{ brand.subtitle }}
         </div>
       </div>
-      <button
-        type="button"
-        class="farm-brand-close lg:hidden"
-        aria-label="关闭导航"
-        @click="appStore.closeSidebar"
-      >
-        <span class="i-carbon-close" aria-hidden="true" />
-      </button>
     </div>
 
     <div class="farm-brand-divider" aria-hidden="true" />
@@ -349,19 +360,9 @@ watch(
   font-size: 11px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   letter-spacing: 0;
-}
-.farm-brand-close {
-  display: inline-grid;
-  width: 40px;
-  height: 40px;
-  flex: none;
-  place-items: center;
-  border-radius: 10px;
-  color: var(--muted-text);
-  font-size: 20px;
-}
-.farm-brand-close:hover {
-  background: var(--surface-2);
+  /* 场景英文副标题必须单行：QQ RANCH ASSISTANT 比 FARM 长，
+     换行会把品牌区撑高，导致农场/牧场左上角高度不一致。 */
+  white-space: nowrap;
 }
 .farm-brand-divider {
   height: 1px;

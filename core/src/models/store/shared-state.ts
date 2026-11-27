@@ -9,7 +9,6 @@ const { createConfigStorage } = require('./config-storage');
 const { storageError } = require('../../services/json-db');
 const { parseHourOfDay } = require('../../utils/hour-of-day');
 const { RANCH_AUTOMATION_DEFAULTS, normalizeRanchSetting, migrateRanchMarketAutomation } = require('../../config/ranch-automation');
-const { SWEET_POTATO_DEFAULTS } = require('../../config/sweet-potato');
 
 const STORE_FILE: string = getDataFile('store.json');
 const ACCOUNTS_FILE: string = getDataFile('accounts.json');
@@ -75,7 +74,32 @@ function normalizeCapitalMode(value: unknown, fallback: CapitalModeConfig = DEFA
 const DEFAULT_ACCOUNT_CONFIG: AccountConfig = {
     automation: {
         ...RANCH_AUTOMATION_DEFAULTS,
-        ...SWEET_POTATO_DEFAULTS,
+        // 默认只做「领种子 + 分享」这两件零风险的事；自动卖薯要动别人的铺子额度，
+        // 默认也开，但好友都收满时默认兜底卖给自己，避免一批蜜薯烂在背包里。
+        yishu_enabled: true,
+        yishu_claim_seed: true,
+        yishu_share: true,
+        yishu_auto_sell: true,
+        yishu_claim_commission: true,
+        // 提成是累计金额，6 小时看一次足够；每 10 分钟查一次只是白花读请求。
+        yishu_commission_interval_hours: 6,
+        yishu_scan_enabled: true,
+        yishu_sell_fallback_own: true,
+        yishu_scan_friend_limit: 20,
+        // 比价按小时节流：一轮扫描就要遍历几十家铺子，2 小时内复用结果。
+        yishu_scan_interval_hours: 2,
+        yishu_scan_interval_minutes: 30,
+        yishu_sell_min_count: 1,
+        // 好友只比自己高 0~1 个福气币时不值得换铺子，默认要求至少高 1。
+        yishu_sell_min_gain: 1,
+        yishu_sell_keep_count: 0,
+        // 默认等到 23:00 再卖：此时好友当天基本都分享过、暴击加成已经加上。
+        // 留空表示不限时段（旧行为），填 "HH:MM" 就是过了这个点才卖。
+        yishu_sell_after_time: '23:00',
+        // 高价立即卖出默认关：只有扫到的成交价 >= 阈值才绕过上面的出售时间闸门，
+        // 避免默认行为突然变成「白天一有高价就卖」。
+        yishu_quick_sell_enabled: false,
+        yishu_quick_sell_price: 500,
         farm: true,
         farm_harvest_tiangong: true,
         farm_push: true,
@@ -452,6 +476,61 @@ function normalizeIntervals(intervals: Partial<IntervalConfig> | undefined): Int
     } as IntervalConfig;
 }
 
+/**
+ * 以薯换福的可调数值项与安全区间，必须与
+ * `services/yishuhuanfu-auto.ts` 里的 toInt() 保持一致。
+ *
+ * 这几项默认值是**数字**，前端可能传字符串甚至布尔：不显式夹取的话，
+ * 「每轮扫几家」退化成 1，或者 5~720 分钟的比价间隔变成 0（等于每轮都全量扫好友）。
+ */
+const YISHU_NUMERIC_RANGES: Record<string, [number, number]> = {
+    yishu_scan_friend_limit: [1, 200],
+    yishu_scan_interval_hours: [1, 48],
+    yishu_scan_interval_minutes: [5, 720],
+    yishu_commission_interval_hours: [1, 48],
+    yishu_sell_min_count: [1, 10000],
+    yishu_sell_min_gain: [0, 100000],
+    yishu_sell_keep_count: [0, 100000],
+    yishu_quick_sell_price: [1, 1000000],
+};
+
+/**
+ * 卖薯开始时间 "HH:MM"。空串 / 非法值一律当「不限时段」，避免把界面输错的东西
+ * 变成「永远不卖」——闸门只推迟卖薯，绝不该让它彻底停下。
+ */
+function normalizeSellAfterTime(value: unknown): string {
+    const raw = String(value ?? '').trim();
+    if (!raw) return '';
+    const match = /^(\d{1,2})\s*[:：]\s*(\d{1,2})$/.exec(raw);
+    if (!match) return '';
+    const hour = Number(match[1]);
+    const minute = Number(match[2]);
+    if (!Number.isFinite(hour) || !Number.isFinite(minute)) return '';
+    const clampedHour = Math.max(0, Math.min(23, hour));
+    const clampedMinute = Math.max(0, Math.min(59, minute));
+    return `${String(clampedHour).padStart(2, '0')}:${String(clampedMinute).padStart(2, '0')}`;
+}
+
+function clampYishuNumber(value: unknown, range: [number, number]): number {
+    const parsed = Number.parseInt(String(value), 10);
+    if (!Number.isFinite(parsed)) return range[0];
+    return Math.max(range[0], Math.min(range[1], parsed));
+}
+
+/**
+ * 以薯换福配置统一归一化：数值走区间夹取，时间串走 HH:MM，其余按布尔。
+ *
+ * 必须共用这一份：applyConfigSnapshot 的兜底分支是 `!!v`，会把 "23:00" 存成 true、
+ * 把 6 存成 true，导致面板上选的出售时间保存后消失。新增 yishu_* 键时只要加进
+ * YISHU_NUMERIC_RANGES 或这里的时间分支，两处保存链路自动同步。
+ */
+function normalizeYishuAutomationValue(key: string, value: unknown): any {
+    const range = YISHU_NUMERIC_RANGES[key];
+    if (range) return clampYishuNumber(value, range);
+    if (key === 'yishu_sell_after_time') return normalizeSellAfterTime(value);
+    return value === true || value === 'true';
+}
+
 function cloneAccountConfig(base: Partial<AccountConfig> = DEFAULT_ACCOUNT_CONFIG): AccountConfig {
     const srcAutomation = (base && base.automation && typeof base.automation === 'object')
         ? migrateRanchMarketAutomation(base.automation)
@@ -460,6 +539,22 @@ function cloneAccountConfig(base: Partial<AccountConfig> = DEFAULT_ACCOUNT_CONFI
     for (const key of Object.keys(automation) as Array<keyof AutomationConfig>) {
         if (key === 'fertilizer_land_types') {
             automation[key] = normalizeFertilizerLandTypes(srcAutomation[key], DEFAULT_FERTILIZER_LAND_TYPES);
+            continue;
+        }
+        const yishuRange = YISHU_NUMERIC_RANGES[key as string];
+        if (yishuRange) {
+            if (srcAutomation[key] !== undefined) {
+                (automation as any)[key] = clampYishuNumber(srcAutomation[key], yishuRange);
+            }
+            continue;
+        }
+        // "HH:MM" 是字符串项，不显式归一就会被当普通值透传，界面输错就永久不卖。
+        if (key === 'yishu_sell_after_time') {
+            // 只有「配置里确实没有这个键」才用默认值；显式存了空串表示「不限时段」，
+            // 不能反过来被默认值覆盖——否则用户选了「留空」下次开机会又变回 23:00。
+            (automation as any)[key] = srcAutomation[key] === undefined
+                ? DEFAULT_ACCOUNT_CONFIG.automation.yishu_sell_after_time
+                : normalizeSellAfterTime(srcAutomation[key]);
             continue;
         }
         if (srcAutomation[key] !== undefined) (automation as any)[key] = (srcAutomation as any)[key];
@@ -532,7 +627,9 @@ function normalizeAccountConfig(input: unknown, fallback: AccountConfig = accoun
         }
         for (const [k, v] of Object.entries(migrateRanchMarketAutomation(src.automation))) {
             if (!ALLOWED_AUTOMATION_KEYS.has(k)) continue;
-            if (k === 'fertilizer') {
+            if (k.startsWith('yishu_')) {
+                (cfg.automation as any)[k] = normalizeYishuAutomationValue(k, v);
+            } else if (k === 'fertilizer') {
                 (cfg.automation as any)[k] = normalizeFertilizerMode(v, cfg.automation.fertilizer);
             } else if (k === 'fertilizer_land_types') {
                 cfg.automation.fertilizer_land_types = normalizeFertilizerLandTypes(v, cfg.automation.fertilizer_land_types);
@@ -870,6 +967,7 @@ module.exports = {
     get systemConfigMigrated() { return systemConfigMigrated; },
     set systemConfigMigrated(v: boolean) { systemConfigMigrated = !!v; },
     // Helpers
+    normalizeYishuAutomationValue,
     normalizeKnownFriendGids,
     normalizeKnownFriendGidSyncCooldownSec,
     normalizeFriendsListCacheTtlSec,

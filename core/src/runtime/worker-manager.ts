@@ -23,9 +23,20 @@ const API_CALL_TIMEOUTS_MS: Record<string, number> = {
     scanWeatherFriends: 60000,
     getWeatherFriends: 30000,
     clearRanchIllustratedNew: 40000,
-    // 以薯换福：好友铺子每个查一次（最多 5 家），出售前还要复核价格与余量。
-    getSweetPotatoShops: 90000,
-    operateSweetPotato: 180000,
+    // 以薯换福：好友铺子每个查一次（默认最多 20 家），出售前还要复核价格与余量。
+    queryYishuHuanfuShop: 90000,
+    queryYishuHuanfuCatalog: 60000,
+    queryYishuHuanfuRecords: 30000,
+    getCurrentYishuHuanfuActivity: 90000,
+    // 比价一次最多扫 20 家、并发 4，按每家 8 秒超时算，留足余量。
+    scanYishuHuanfuFriendShops: 240000,
+    // 刷新本人行情只查一家，和 queryYishuHuanfuShop 同级。
+    refreshYishuHuanfuQuote: 30000,
+    sellYishuHuanfuSweetPotato: 180000,
+    exchangeYishuHuanfuGoods: 120000,
+    claimYishuHuanfuSeeds: 60000,
+    claimYishuHuanfuCommission: 60000,
+    shareYishuHuanfuShop: 120000,
     // 主动加好友：逐条 Enter → ApplyFriend，每条间隔 2 秒，一批可能跑几分钟。
     applyFriendInvites: 10 * 60 * 1000,
 };

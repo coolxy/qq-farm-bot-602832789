@@ -1,12 +1,236 @@
 {
   "major": 3,
-  "minor": 37,
-  "patch": 0,
-  "build": 263,
-  "version": "3.37.0",
-  "updatedAt": "2026-11-25T10:04:23.043Z",
+  "minor": 39,
+  "patch": 28,
+  "build": 295,
+  "version": "3.39.28",
+  "updatedAt": "2026-11-27T10:04:52.369Z",
   "lastCommit": "—",
   "history": [
+    {
+      "version": "3.39.28",
+      "build": 295,
+      "date": "2026-11-27",
+      "summary": "更新助手拉取改 HTTP/1.1 + 重试，失败原因按日志点名",
+      "commit": "—",
+      "type": "patch"
+    },
+    {
+      "version": "3.39.27",
+      "build": 293,
+      "date": "2026-11-27",
+      "summary": "移除侧栏品牌区关闭叉，修复牧场英文副标题换行导致的高度不一致",
+      "commit": "—",
+      "type": "patch"
+    },
+    {
+      "version": "3.39.26",
+      "build": 292,
+      "date": "2026-11-27",
+      "summary": "恢复牧场今日统计「其他数据」（无数据隐藏），以薯换福新高价立即卖出开关",
+      "commit": "—",
+      "type": "patch"
+    },
+    {
+      "version": "3.39.25",
+      "build": 291,
+      "date": "2026-11-27",
+      "summary": "牧场今日统计去除「出栏」（放生）瓦片",
+      "commit": "—",
+      "type": "patch"
+    },
+    {
+      "version": "3.39.23",
+      "build": 290,
+      "date": "2026-11-27",
+      "summary": "以薯换福好友比价改为全量扫描 + 报价累积不覆盖",
+      "commit": "—",
+      "type": "patch"
+    },
+    {
+      "version": "3.39.22",
+      "build": 289,
+      "date": "2026-11-26",
+      "summary": "牧场今日统计重排 15 项并加回「任务」瓦片",
+      "commit": "—",
+      "type": "patch"
+    },
+    {
+      "version": "3.39.21",
+      "build": 288,
+      "date": "2026-11-26",
+      "summary": "同步上游 `cd30ca7→961f50e` 好友池缓存目录扫描修复",
+      "commit": "—",
+      "type": "patch"
+    },
+    {
+      "version": "3.39.20",
+      "build": 287,
+      "date": "2026-11-26",
+      "summary": "移除 `core` 死依赖 `qrcode`，修复 `--frozen-lockfile` 构建失败",
+      "commit": "—",
+      "type": "patch"
+    },
+    {
+      "version": "3.39.19",
+      "build": 286,
+      "date": "2026-11-26",
+      "summary": "同步上游 `27ad69f→cd30ca7`，保留本地定制",
+      "commit": "—",
+      "type": "patch"
+    },
+    {
+      "version": "3.39.18",
+      "build": 285,
+      "date": "2026-11-26",
+      "summary": "库存图鉴改为「已解锁/总数」并统一图鉴命名",
+      "commit": "—",
+      "type": "patch"
+    },
+    {
+      "version": "3.39.17",
+      "build": 283,
+      "date": "2026-11-26",
+      "summary": "牧场今日统计去除「任务」项",
+      "commit": "—",
+      "type": "patch"
+    },
+    {
+      "version": "3.39.16",
+      "build": 282,
+      "date": "2026-11-26",
+      "summary": "牧场今日统计改为指定 15 项，兑换按钮统一，清理以薯换福面板说明",
+      "commit": "—",
+      "type": "patch"
+    },
+    {
+      "version": "3.39.15",
+      "build": 281,
+      "date": "2026-11-26",
+      "summary": "修复以薯换福出售时间等配置保存后丢失，统一活动卡片背景色",
+      "commit": "—",
+      "type": "patch"
+    },
+    {
+      "version": "3.39.13",
+      "build": 280,
+      "date": "2026-11-26",
+      "summary": "以薯换福自动化开关移入活动设置页的活动卡片",
+      "commit": "—",
+      "type": "patch"
+    },
+    {
+      "version": "3.39.12",
+      "build": 279,
+      "date": "2026-11-26",
+      "summary": "修复「出售时间」默认值被归一化吞掉",
+      "commit": "—",
+      "type": "patch"
+    },
+    {
+      "version": "3.39.11",
+      "build": 278,
+      "date": "2026-11-26",
+      "summary": "以薯换福自动化按新版面板补齐配置项",
+      "commit": "—",
+      "type": "patch"
+    },
+    {
+      "version": "3.39.10",
+      "build": 277,
+      "date": "2026-11-26",
+      "summary": "常规更新",
+      "commit": "—",
+      "type": "patch"
+    },
+    {
+      "version": "3.39.9",
+      "build": 276,
+      "date": "2026-11-26",
+      "summary": "同步上游以薯换福自动卖薯修复与自定义开始时间",
+      "commit": "—",
+      "type": "patch"
+    },
+    {
+      "version": "3.39.8",
+      "build": 275,
+      "date": "2026-11-26",
+      "summary": "常规更新",
+      "commit": "—",
+      "type": "patch"
+    },
+    {
+      "version": "3.39.7",
+      "build": 273,
+      "date": "2026-11-26",
+      "summary": "常规更新",
+      "commit": "—",
+      "type": "patch"
+    },
+    {
+      "version": "3.39.6",
+      "build": 272,
+      "date": "2026-11-26",
+      "summary": "以薯换福页面完全按 li 版重做",
+      "commit": "—",
+      "type": "patch"
+    },
+    {
+      "version": "3.39.5",
+      "build": 271,
+      "date": "2026-11-26",
+      "summary": "按 li 版设计稿重构以薯换福活动页，修复补种模块路径与面板版本号不同步",
+      "commit": "—",
+      "type": "patch"
+    },
+    {
+      "version": "3.39.3",
+      "build": 270,
+      "date": "2026-11-26",
+      "summary": "常规更新",
+      "commit": "—",
+      "type": "patch"
+    },
+    {
+      "version": "3.39.2",
+      "build": 269,
+      "date": "2026-11-26",
+      "summary": "常规更新",
+      "commit": "—",
+      "type": "patch"
+    },
+    {
+      "version": "3.39.1",
+      "build": 268,
+      "date": "2026-11-26",
+      "summary": "修复分享确认失败后冷却结束会重发 cmd 98",
+      "commit": "b75bb5e2",
+      "type": "patch"
+    },
+    {
+      "version": "3.39.0",
+      "build": 267,
+      "date": "2026-11-26",
+      "summary": "移植 li 版以薯换福运行时方案，同步协议与游戏客户端版本",
+      "commit": "b75bb5e2",
+      "type": "minor"
+    },
+    {
+      "version": "3.38.0",
+      "build": 266,
+      "date": "2026-11-25",
+      "summary": "新增以薯换福收购记录与自动比价卖薯，补齐上一轮遗留项",
+      "commit": "—",
+      "type": "minor"
+    },
+    {
+      "version": "3.37.1",
+      "build": 265,
+      "date": "2026-11-25",
+      "summary": "修复以薯换福兑换协议与自家铺子额度，补上提成领取",
+      "commit": "—",
+      "type": "patch"
+    },
     {
       "version": "3.37.0",
       "build": 263,

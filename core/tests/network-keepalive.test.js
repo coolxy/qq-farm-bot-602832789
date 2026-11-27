@@ -8,6 +8,7 @@ const {
     CONFIG,
     DEFAULT_CLIENT_VERSION,
     DEFAULT_CLIENT_VERSION_UPDATED_AT,
+    DEFAULT_WX_CLIENT_VERSION,
     resolveClientVersion,
     resolveClientVersionUpdatedAt,
 } = require('../dist/config/config');
@@ -69,10 +70,11 @@ test('heartbeat request body reproduces the official capture byte for byte', asy
 });
 
 test('default client version has a release timestamp', () => {
-    // 2026-11-22 抓包：服务端已升到 1.17.0.6_20261117。
-    // QQ 客户端版本与微信不同步：QQ 保持 1.17.0.3 基线，微信才是 1.17.0.6。
-    assert.equal(DEFAULT_CLIENT_VERSION, '1.17.0.3_20261117');
-    assert.equal(DEFAULT_CLIENT_VERSION_UPDATED_AT, 1794795016627);
+    // 2026-11-25 按 muyuewang/qq-farm-bot-li 的实机抓包对齐：QQ 与微信两端统一 1.17.1.10。
+    // 旧基线（QQ 1.17.0.3 / 微信 1.17.0.6）已过期，连上去会被回「Code 或版本不符」。
+    assert.equal(DEFAULT_CLIENT_VERSION, '1.17.1.10_20261117');
+    assert.equal(DEFAULT_CLIENT_VERSION_UPDATED_AT, 1795596035361);
+    assert.equal(DEFAULT_WX_CLIENT_VERSION, '1.17.1.10_20261117');
 });
 
 test('newer timestamp wins when resolving the client version', () => {

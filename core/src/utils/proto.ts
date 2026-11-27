@@ -42,7 +42,6 @@ async function loadProto(): Promise<void> {
         getResourcePath('proto', 'collectionpb.proto'),
         getResourcePath('proto', 'interactpb.proto'),
         getResourcePath('proto', 'activitypb.proto'),
-        getResourcePath('proto', 'sweet-potato.proto'),
         getResourcePath('proto', 'muge.proto'),
         getResourcePath('proto', 'seasonpb.proto'),
         getResourcePath('proto', 'solartermspb.proto'),
@@ -72,7 +71,20 @@ async function loadProto(): Promise<void> {
     for (const name of ['MugeListReply', 'MugeOperateRequest', 'MugeOperateReply']) {
         types[name] = root.lookupType(`gamepb.activitypb.${name}`);
     }
-    for (const name of ['SweetPotatoGroupReply', 'SweetPotatoOperateRequest', 'SweetPotatoOperateReply']) {
+    // 以薯换福：请求类型走 Operate 的 cmd 槽位，状态槽在 ActivityData.field 130。
+    for (const name of [
+        'ActivityData',
+        'YshfState',
+        'YshfCatalog',
+        'YshfClaimSeedRequest',
+        'YshfShopQueryRequest',
+        'YshfSellRequest',
+        'YshfExchangeRequest',
+        'YshfRecordRequest',
+        'YshfClaimCommissionRequest',
+        'YshfCatalogRequest',
+        'YshfShareRequest',
+    ]) {
         types[name] = root.lookupType(`gamepb.activitypb.${name}`);
     }
 
@@ -305,6 +317,22 @@ async function loadProto(): Promise<void> {
     }
     types.CharityRedFlowerProgressRewardResult = root.lookupType('gamepb.activitypb.CharityRedFlowerProgressRewardResult');
     types.ActivityOperateReply = root.lookupType('gamepb.activitypb.ActivityOperateReply');
+    // 以薯换福：请求类型走 Operate 的 cmd 槽位，状态槽在 ActivityData.field 130。
+    for (const name of [
+        'ActivityData',
+        'YshfState',
+        'YshfCatalog',
+        'YshfClaimSeedRequest',
+        'YshfShopQueryRequest',
+        'YshfSellRequest',
+        'YshfExchangeRequest',
+        'YshfRecordRequest',
+        'YshfClaimCommissionRequest',
+        'YshfCatalogRequest',
+        'YshfShareRequest',
+    ]) {
+        types[name] = root.lookupType(`gamepb.activitypb.${name}`);
+    }
     types.GetWeatherStatusRequest = root.lookupType('gamepb.weatherpb.GetWeatherStatusRequest');
     types.GetWeatherStatusReply = root.lookupType('gamepb.weatherpb.GetWeatherStatusReply');
     types.GetSeasonInfoRequest = root.lookupType('gamepb.seasonpb.GetSeasonInfoRequest');

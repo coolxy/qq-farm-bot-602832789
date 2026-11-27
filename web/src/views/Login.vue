@@ -9,7 +9,9 @@ import { useUserStore } from '@/stores/user'
 declare const __APP_VERSION_LABEL__: string
 
 const userStore = useUserStore()
-const appVersionLabel = __APP_VERSION_LABEL__
+// 构建期常量只作首屏兜底：提交钩子 bump 版本号时不会重建前端，
+// 只认常量的话登录页会一直挂着旧版本。挂载后向服务端要真值。
+const appVersionLabel = ref(__APP_VERSION_LABEL__)
 const gameVersion = ref('')
 const wxGameVersion = ref('')
 const username = ref('')
@@ -104,16 +106,33 @@ async function handleSubmit() {
 async function fetchGameVersion() {
   try {
     const res = await api.get('/api/game-version')
-    if (res.data.ok)
+    if (res.data.ok) {
       gameVersion.value = res.data.clientVersion
-    wxGameVersion.value = res.data.wxClientVersion || ''
+      wxGameVersion.value = res.data.wxClientVersion || ''
+    }
   }
   catch (e) {
     console.error('获取游戏版本失败:', e)
   }
 }
 
-onMounted(fetchGameVersion)
+/** 面板版本号取服务端仓库根 version.json，构建期常量只兜底（服务不可达时不清空）。 */
+async function fetchWebVersion() {
+  try {
+    const res = await api.get('/api/version')
+    const label = String(res.data?.data?.label || '').trim()
+    if (label)
+      appVersionLabel.value = label
+  }
+  catch (e) {
+    console.error('获取面板版本失败:', e)
+  }
+}
+
+onMounted(() => {
+  void fetchGameVersion()
+  void fetchWebVersion()
+})
 </script>
 
 <template>
@@ -351,7 +370,7 @@ onMounted(fetchGameVersion)
 .logo-kicker {
   color: var(--ui-primary);
   font-size: 10px;
-  font-weight: var(--fw-700);
+  font-weight: 700;
 }
 
 .logo-title {
@@ -387,7 +406,7 @@ onMounted(fetchGameVersion)
   gap: 7px;
   color: var(--ui-ink);
   font-size: 13px;
-  font-weight: var(--fw-600);
+  font-weight: 600;
 }
 
 .form-label > span {

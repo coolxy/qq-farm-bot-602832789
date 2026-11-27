@@ -23,6 +23,7 @@ const {
     normalizeAutoAcceptFriendMinLevel,
     normalizeAutoAcceptHarvestStealHarvest,
     normalizeAutoAcceptHarvestStealSteal,
+    normalizeYishuAutomationValue,
     normalizeCapitalMode,
     ALLOWED_PLANTING_STRATEGIES,
 } = sharedState;
@@ -163,7 +164,11 @@ function applyConfigSnapshot(snapshot: Record<string, any> | undefined, options:
     if (cfg.automation && typeof cfg.automation === 'object') {
         for (const [k, v] of Object.entries(migrateRanchMarketAutomation(cfg.automation))) {
             if ((next.automation as any)[k] === undefined) continue;
-            if (k === 'fertilizer') {
+            // yishu_* 里既有数值也有 "HH:MM" 字符串，不能落进下面的 `!!v` 兜底，
+            // 否则界面选的「出售时间 23:00」保存后会变成 true，下拉框直接空掉。
+            if (k.startsWith('yishu_')) {
+                (next.automation as any)[k] = normalizeYishuAutomationValue(k, v);
+            } else if (k === 'fertilizer') {
                 // 白名单必须包含「只催熟」两种模式，否则保存时会被静默重置。
                 (next.automation as any)[k] = sharedState.normalizeFertilizerMode(v, next.automation.fertilizer);
             } else if (k === 'fertilizer_land_types') {

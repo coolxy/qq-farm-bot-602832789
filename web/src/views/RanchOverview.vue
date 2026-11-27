@@ -105,13 +105,15 @@ const stockTiles = computed(() => {
     image: Number(bucket.id) === 7004 ? '/game-config/ranch-icons/can-organic.png' : '/game-config/ranch-icons/can-normal.png',
     value: formatHours(state.value?.buckets?.find((b: any) => Number(b.id) === bucket.id)?.seconds ?? 0),
   }))
-  const normalPoints = book.value?.normal?.progress
-  const giantPoints = book.value?.giant?.score
+  // 图鉴卡片显示「已解锁 / 总条目」，口径与农场首页的作物 / 超变图鉴一致。
+  const animals: any[] = Array.isArray(book.value?.animals) ? book.value.animals : []
+  const unlockedCount = (pick: (entry: any) => boolean) => animals.filter(entry => pick(entry)).length
+  const fraction = (unlocked: number) => animals.length ? `${unlocked}/${animals.length}` : '—'
   return [
     ...cans,
     // 图标用 resource-icons 里 219px 的官方大图，ranch-icons 里 32px 的小图在卡片上发糊。
-    { key: 'book-normal', label: '普通图鉴', image: '/game-config/resource-icons/illustrated-crop.png', value: normalPoints != null ? formatCount(normalPoints) : '—' },
-    { key: 'book-giant', label: '巨大图鉴', image: '/game-config/resource-icons/illustrated-mutant.png', value: giantPoints != null ? formatCount(giantPoints) : '—' },
+    { key: 'book-normal', label: '普通图鉴', image: '/game-config/resource-icons/illustrated-crop.png', value: fraction(unlockedCount(entry => entry.unlocked === true)) },
+    { key: 'book-giant', label: '巨大化图鉴', image: '/game-config/resource-icons/illustrated-mutant.png', value: fraction(unlockedCount(entry => entry.giant?.unlocked === true)) },
   ]
 })
 
@@ -166,20 +168,32 @@ const todayKey = computed(() => {
 
 const todayExpGained = computed(() => Math.max(0, Number(status.value?.sessionExpGained) || 0))
 const todayOperations = computed(() => ranchTodayOperations(state.value?.operations, state.value?.operationsDate, todayKey.value))
+// 「其他数据」：固定 14 项之外、当天确实有记录的动作。只保留 count > 0 的项，
+// 今日没有任何记录时这一组不渲染，避免一排 0 把面板撑满。
 const operationEntries = computed(() => Object.entries(todayOperations.value).filter(([, count]) => Number(count) > 0))
 
-/* ── 今日统计瓦片：先资源今日增减（金券/松果/便便），再固定动作计数（偷取/出售/蚊子/清理），
-   其余动作有记录才出现。样式与同一网格里的其它瓦片完全一致。 ── */
+/* ── 今日统计瓦片：金券 / 经验 / 松果 / 便便 四项资源，加 10 项固定动作计数，
+   共 14 项始终展示（没有记录的显示 0）；此外把当天有记录的表外动作作为「其他数据」
+   追加在末尾，无记录时不渲染。样式与同一网格里的其它瓦片一致。 ── */
 const RANCH_TODAY_CURRENCIES = [
   { id: 1007, label: '金券', icon: 'i-carbon-ticket' },
   { id: 1008, label: '松果', icon: 'i-carbon-tree' },
   { id: 7002, label: '便便', icon: 'i-carbon-recycle' },
 ] as const
+// 今日统计固定展示这 10 项动作（连同 4 项资源共 14 项），顺序即下面的 TODAY_TILE_ORDER。
+// key 与 core/src/services/ranch/stats.ts 的 recordAction(action) 一一对应。
+// 「出栏」（release，放生动物）已移除：放生是手动动作、无自动化任务，统计恒为 0。
 const RANCH_TODAY_ACTIONS = [
-  { key: 'steal', label: '偷取' },
   { key: 'sell', label: '出售' },
-  { key: 'clean', label: '清理' },
+  { key: 'steal', label: '偷取' },
+  { key: 'feed', label: '喂养' },
   { key: 'putMosquito', label: '蚊子' },
+  { key: 'produceFriend', label: '帮催产' },
+  { key: 'produce', label: '催产' },
+  { key: 'cleanFriend', label: '帮清理' },
+  { key: 'clean', label: '清理' },
+  { key: 'harvest', label: '收产物' },
+  { key: 'claimTasks', label: '任务' },
 ] as const
 
 const currencyStatsMap = computed<Record<string, any>>(() => (state.value?.currencyStats || {}))
@@ -209,6 +223,8 @@ const fixedActionTiles = computed(() => RANCH_TODAY_ACTIONS.map(({ key, label })
   title: label,
 })))
 
+// 「其他数据」瓦片：表外动作有记录才出现（operationEntries 已按 count > 0 过滤），
+// key 仍用 action-<key>，排序时自然落到 TODAY_TILE_ORDER 末尾。
 const otherActionTiles = computed(() => operationEntries.value
   .filter(([key]) => !RANCH_TODAY_ACTIONS.some(item => item.key === key))
   .map(([key, val]) => ({
@@ -230,12 +246,12 @@ const expTile = computed(() => ({
 }))
 
 /**
- * 今日统计瓦片的展示顺序：金券、经验、松果、便便、出售、偷取、蚊子、清理。
+ * 今日统计瓦片的展示顺序（用户指定）：
+ * 金券、经验、松果、便便、出售、偷取、喂养、蚊子、帮催产、催产、帮清理、清理、收产物、任务。
  *
- * 单独维护这张表而不是依赖上面的拼接顺序——RANCH_TODAY_CURRENCIES /
- * RANCH_TODAY_ACTIONS 是按业务语义分组写的，排版顺序会来回调整，
- * 两者耦合会导致「改一个顺序牵连另几处」。以后调位置只改这一行。
- * 表里没列到的动作（otherActionTiles）自动排在末尾，保持原有相对顺序。
+ * 单独维护这张表而不是依赖 RANCH_TODAY_CURRENCIES / RANCH_TODAY_ACTIONS 的拼接顺序，
+ * 这样以后调位置只改这一处。表里没列到的动作（即「其他数据」）自动排在末尾，
+ * 且只在当天有记录时才出现。
  */
 const TODAY_TILE_ORDER = [
   'currency-1007',
@@ -244,8 +260,14 @@ const TODAY_TILE_ORDER = [
   'currency-7002',
   'action-sell',
   'action-steal',
+  'action-feed',
   'action-putMosquito',
+  'action-produceFriend',
+  'action-produce',
+  'action-cleanFriend',
   'action-clean',
+  'action-harvest',
+  'action-claimTasks',
 ]
 
 const todayTiles = computed(() => {

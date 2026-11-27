@@ -146,8 +146,12 @@ function classifyHealth(health: FlowHealth | null | undefined): FlowMode {
     const silence = Math.max(0, Number(health && health.inboundSilenceMs) || 0);
     const pending = Math.max(0, Number(health && health.pending) || 0);
 
-    if (misses > 0 || oldest >= 5000 || (pending > 0 && silence >= 20000)) return 'stall';
-    if (oldest >= 2000 || (pending > 0 && silence >= 8000)) return 'cautious';
+    // 单拍心跳失败很常见，网络侧已有 3 秒补发（成功即归零）。一次 miss 就把整个账号
+    // 砍到 stall（自动任务限额 180 → 24）会让队列更堵，反而把下一次心跳也拖丢，
+    // 形成「一次抖动 → 降级 → 更堵」的正反馈；容器/弱网下这条链会把牧场场景切换卡到超时。
+    // 因此两拍仍失败才进 stall，单拍只降到 cautious。
+    if (misses >= 2 || oldest >= 5000 || (pending > 0 && silence >= 20000)) return 'stall';
+    if (misses === 1 || oldest >= 2000 || (pending > 0 && silence >= 8000)) return 'cautious';
     return 'healthy';
 }
 

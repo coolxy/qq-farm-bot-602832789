@@ -23,6 +23,8 @@
 #   UPDATE_GIT_TOKEN     私密仓库用的访问令牌；公开仓库不需要
 #   UPDATE_COMPOSE_PROJECT  compose project 名；默认从自身容器的 label 里读
 #   UPDATE_BUILD_POLL_SECONDS 构建期间刷进度/心跳的间隔（默认 2）
+#   UPDATE_PULL_ATTEMPTS  git pull 最多尝试次数（默认 3），0/非法值回落到 3
+#   UPDATE_PULL_RETRY_DELAY 重试间隔基数秒数（默认 5，第 n 次等 n×基数）
 #   UPDATE_ONCE=1        只跑一轮就退出（测试用）
 set -u
 
@@ -158,8 +160,20 @@ ensure_compose_project() {
 
 # ── 更新本身 ──────────────────────────────────────────────────────────────────
 
-run_pull() {
-  log "[更新] 当前提交 ${FROM_COMMIT:-未知}，开始拉取代码…"
+# ── 网络参数与重试 ────────────────────────────────────────────────────────────
+# 现场故障：NAS 上 `git pull` 报 `OpenSSL SSL_read: SSL_ERROR_SYSCALL, errno 0`。
+# 这种形态是 TCP 还连着、TLS 记录被中间设备静默丢掉，git 会挂在半死连接上干等；
+# 隔几秒重试一次往往就通了。两个措施：
+#   1) 强制 HTTP/1.1 —— HTTP/2 的多路复用长连接在部分代理 / NAT / 运营商下会被掐；
+#   2) 低速断连 —— 30 秒内低于 1KB/s 就主动放弃，把「假死」变成可重试的失败。
+# 次数与间隔可用环境变量调（默认 3 次、每次 5 秒递增），测试里调小免得白等。
+GIT_NET_OPTS="-c http.version=HTTP/1.1 -c http.lowSpeedLimit=1024 -c http.lowSpeedTime=30"
+PULL_MAX_ATTEMPTS=$(printf '%s' "${UPDATE_PULL_ATTEMPTS:-3}" | tr -cd '0-9')
+[ -n "$PULL_MAX_ATTEMPTS" ] || PULL_MAX_ATTEMPTS=3
+PULL_RETRY_DELAY=$(printf '%s' "${UPDATE_PULL_RETRY_DELAY:-5}" | tr -cd '0-9')
+[ -n "$PULL_RETRY_DELAY" ] || PULL_RETRY_DELAY=5
+
+pull_once() {
   if [ -n "${UPDATE_GIT_TOKEN:-}" ]; then
     origin_url=$(git -C "$PROJECT_DIR" remote get-url origin 2>/dev/null || echo "")
     branch=$(git -C "$PROJECT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)
@@ -167,14 +181,53 @@ run_pull() {
       https://github.com/*)
         # 一次性凭据 URL：令牌不写进 .git/config，只出现在这一次进程里。
         auth_url=$(printf '%s' "$origin_url" | sed "s|^https://github.com/|https://x-access-token:${UPDATE_GIT_TOKEN}@github.com/|")
-        GIT_TERMINAL_PROMPT=0 git -C "$PROJECT_DIR" pull --ff-only "$auth_url" "$branch" >> "$LOG_FILE" 2>&1
+        # $GIT_NET_OPTS 故意不加引号：要按空格拆成多个 -c 参数。
+        GIT_TERMINAL_PROMPT=0 git -C "$PROJECT_DIR" $GIT_NET_OPTS pull --ff-only "$auth_url" "$branch" >> "$LOG_FILE" 2>&1
         return $?
         ;;
     esac
   fi
   # GIT_TERMINAL_PROMPT=0：需要凭据时直接失败，而不是停在原地等人敲用户名
   # （容器里没人能敲，卡住只会让面板一直显示「正在拉取代码」）。
-  GIT_TERMINAL_PROMPT=0 git -C "$PROJECT_DIR" pull --ff-only >> "$LOG_FILE" 2>&1
+  GIT_TERMINAL_PROMPT=0 git -C "$PROJECT_DIR" $GIT_NET_OPTS pull --ff-only >> "$LOG_FILE" 2>&1
+}
+
+# 失败原因按日志实况给，而不是一句「常见原因」让人自己猜。
+# 顺序有讲究：SSL 那几行里同时带 "unable to access"，所以网络分支必须排在最后。
+pull_failure_hint() {
+  recent=$(tail -n 80 "$LOG_FILE" 2>/dev/null || true)
+  hint=""
+  case "$recent" in
+    *"Not possible to fast-forward"*|*"diverging branches"*|*"local changes"*|*"would be overwritten"*|*"Please commit"*)
+      hint="本地有未提交改动或与远端分叉了；助手只做 --ff-only，请先在项目目录处理本地改动再更新" ;;
+    *"Authentication failed"*|*"could not read Username"*|*"Repository not found"*|*"terminal prompts disabled"*)
+      hint="仓库需要凭据：私密仓库请在更新助手上配置 UPDATE_GIT_TOKEN（公开仓库请确认 origin 能匿名拉取）" ;;
+    *SSL_ERROR*|*SSL_connect*|*gnutls*)
+      hint="到 GitHub 的 TLS 连接被中断（SSL_ERROR_SYSCALL）。已按 HTTP/1.1 + 多次重试执行，仍失败说明 NAS 出网到 github.com 不稳定；稍后再试，或在宿主机上手动 git pull" ;;
+    *"Could not resolve host"*|*"Connection timed out"*|*"Connection refused"*|*"unable to access"*|*"Failed to connect"*)
+      hint="NAS 访问不到 github.com（DNS / 出网 / 防火墙）；先在宿主机执行 curl -I https://github.com/ 确认" ;;
+  esac
+  [ -n "$hint" ] || hint="git pull --ff-only 失败：常见原因是本地有未提交改动、分支没有上游、或私密仓库缺少凭据（见日志）"
+  printf '%s' "$hint"
+}
+
+run_pull() {
+  log "[更新] 当前提交 ${FROM_COMMIT:-未知}，开始拉取代码…"
+  attempt=1
+  while [ "$attempt" -le "$PULL_MAX_ATTEMPTS" ]; do
+    if pull_once; then
+      [ "$attempt" -gt 1 ] && log "[更新] 第 ${attempt} 次拉取成功。"
+      return 0
+    fi
+    if [ "$attempt" -lt "$PULL_MAX_ATTEMPTS" ]; then
+      pause=$((attempt * PULL_RETRY_DELAY))
+      log "[更新] 第 ${attempt}/${PULL_MAX_ATTEMPTS} 次拉取失败，${pause} 秒后重试…"
+      sleep "$pause"
+    fi
+    attempt=$((attempt + 1))
+  done
+  log "[更新] 已连续重试 ${PULL_MAX_ATTEMPTS} 次，仍然失败。"
+  return 1
 }
 
 # 容器里是 root，宿主机上的项目目录通常属于某个普通用户。git pull 写出来的文件会变成
@@ -212,11 +265,10 @@ run_update() {
   git config --global --add safe.directory "$PROJECT_DIR" >/dev/null 2>&1
 
   FROM_COMMIT=$(git -C "$PROJECT_DIR" rev-parse --short=7 HEAD 2>/dev/null || echo "")
-  write_job running "正在拉取代码" "git pull --ff-only" ""
+  write_job running "正在拉取代码" "git pull --ff-only（HTTP/1.1，最多 ${PULL_MAX_ATTEMPTS} 次）" ""
   if ! run_pull; then
     log "[错误] git pull 失败。服务没被动，仍在运行。"
-    write_job failed "拉取代码失败" "服务未受影响" \
-      "git pull --ff-only 失败：常见原因是本地有未提交改动、分支没有上游、或私密仓库缺少凭据（见日志）"
+    write_job failed "拉取代码失败" "服务未受影响" "$(pull_failure_hint)"
     return 1
   fi
   TARGET_COMMIT=$(git -C "$PROJECT_DIR" rev-parse --short=7 HEAD 2>/dev/null || echo "")

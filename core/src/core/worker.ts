@@ -23,6 +23,7 @@ const { checkDailyShareStatus, getShareDailyState } = require('../services/share
 const { refreshActivityWindows } = require('../services/activity-windows');
 const { resetSessionGains, recordOperation, initStatsWithPersistence, saveStats } = require('../services/stats');
 const { startPetFeedCheckTimer, stopPetFeedCheckTimer } = require('../services/pet-feed');
+const { startYishuTimer } = require('../services/yishuhuanfu-auto');
 const { initStatusBar, setStatusPlatform, statusData } = require('../services/status');
 const { setRecordGoldExpHook } = require('../services/status');
 const { cleanupTaskSystem, checkAndClaimTasks, getTaskClaimDailyState, getTaskDailyStateLikeApp, getGrowthTaskStateLikeApp } = require('../services/task');
@@ -821,6 +822,7 @@ async function runStartupSequence(canContinue: () => boolean = () => loginReady)
             startMysteryShopTimer();
             startActivityAutomationTimer();
             startMugeAutomationTimer();
+            startYishuTimer(workerScheduler, () => loginReady);
             startPetFeedCheckTimer();
         });
     } catch (e: any) {
@@ -965,6 +967,7 @@ function applyRuntimeConfig(snapshot: any, syncNow: boolean = false): number {
             startMysteryShopTimer();
             startActivityAutomationTimer();
             startMugeAutomationTimer();
+            startYishuTimer(workerScheduler, () => loginReady);
             startPetFeedCheckTimer();
             // 化肥自动购买检测：原来只在 startFarmCheckLoop（登录/启动）建一次，
             // 而两个开关默认都是关的，登录时定时器根本不会建；之后在面板打开开关
@@ -1712,17 +1715,38 @@ async function handleApiCall(msg: any): Promise<void> {
                 case 'settleQingMeiBrew':
                     result = await require('../services/activity-center').settleQingMeiBrew();
                     break;
-                case 'getSweetPotatoActivity':
-                    result = await require('../services/activity-center').getSweetPotatoActivity();
+                case 'getCurrentYishuHuanfuActivity':
+                    result = await require('../services/activity-center').getCurrentYishuHuanfuActivity();
                     break;
-                case 'getSweetPotatoShopCatalog':
-                    result = await require('../services/activity-center').getSweetPotatoShopCatalog();
+                case 'queryYishuHuanfuCatalog':
+                    result = await require('../services/activity-center').queryYishuHuanfuCatalog();
                     break;
-                case 'getSweetPotatoShops':
-                    result = await require('../services/activity-center').getSweetPotatoShops(args[0]);
+                case 'queryYishuHuanfuRecords':
+                    result = await require('../services/activity-center').queryYishuHuanfuRecords();
                     break;
-                case 'operateSweetPotato':
-                    result = await require('../services/activity-center').operateSweetPotato(args[0], args[1]);
+                case 'claimYishuHuanfuCommission':
+                    result = await require('../services/activity-center').claimYishuHuanfuCommission();
+                    break;
+                case 'claimYishuHuanfuSeeds':
+                    result = await require('../services/activity-center').claimYishuHuanfuSeeds();
+                    break;
+                case 'sellYishuHuanfuSweetPotato':
+                    result = await require('../services/activity-center').sellYishuHuanfuSweetPotato(args[0], args[1]);
+                    break;
+                case 'queryYishuHuanfuShop':
+                    result = await require('../services/activity-center').queryYishuHuanfuShop(args[0]);
+                    break;
+                case 'scanYishuHuanfuFriendShops':
+                    result = await require('../services/activity-center').scanYishuHuanfuFriendShops(args[0]);
+                    break;
+                case 'exchangeYishuHuanfuGoods':
+                    result = await require('../services/activity-center').exchangeYishuHuanfuGoods(args[0], args[1]);
+                    break;
+                case 'refreshYishuHuanfuQuote':
+                    result = await require('../services/activity-center').refreshYishuHuanfuQuote();
+                    break;
+                case 'shareYishuHuanfuShop':
+                    result = await require('../services/activity-center').shareYishuHuanfuShop();
                     break;
                 case 'claimQixiBridgeRewards':
                     result = await require('../services/activity-center').claimQixiBridgeRewards();

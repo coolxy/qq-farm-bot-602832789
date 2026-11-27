@@ -92,6 +92,15 @@ test('网关变慢时自动任务额度自动收紧', () => {
     assert.equal(cautiousResult.mode, 'cautious');
 });
 
+test('单拍心跳失败只降到 cautious，不能一步砍到 stall', () => {
+    resetGovernor();
+    // 一次丢包很常见（网络侧还有 3 秒补发）。直接砍到 stall 会让自动任务排队更堵，
+    // 反而把下一拍心跳也拖丢，形成「抖动 → 降级 → 更堵」的恶性循环。
+    const singleMiss = { heartbeatMisses: 1, oldestPendingAgeMs: 0, inboundSilenceMs: 0, pending: 0 };
+    const result = checkRequest(...BAG, Date.now(), { requestClass: 'farm', health: singleMiss });
+    assert.equal(result.mode, 'cautious');
+});
+
 test('网关卡住时自动任务几乎停摆，把连接留给心跳', () => {
     resetGovernor();
     const now = Date.now();

@@ -333,6 +333,24 @@ test('版本钩子只认标题开头的版本标记，描述里的旧版本号�
   assert.equal(markLatestChangelogTitle(noDate, 'v3.17.3（#123）'), noDate, '旧格式标题也识别为已打标')
 })
 
+test('面板版本号运行时向服务端取，构建期常量只作首屏兜底', () => {
+  const sidebar = read('web/src/components/Sidebar.vue')
+  // `__APP_VERSION_LABEL__` 只有 build:web 时才更新，而提交钩子每次都 bump 版本号。
+  // 只用常量会出现「提交了、后端也重启了，面板还显示旧版本」，所以挂载后必须再问一次。
+  assert.match(sidebar, /const versionLabel = ref\(__APP_VERSION_LABEL__\)/, '构建常量只能当初值')
+  assert.match(sidebar, /api\.get\('\/api\/version'\)/, '要问服务端的真源版本')
+  assert.match(sidebar, /versionLabel\.value = label/, '拿到服务端结果要覆盖初值')
+  assert.match(sidebar, /onMounted\(\(\) => \{ void loadVersionLabel\(\) \}\)/, '挂载时必须触发一次')
+  // 服务不可达时保持常量，不能把版本号整行清空。
+  assert.doesNotMatch(sidebar, /versionLabel\.value = ''/, '请求失败不能清空版本号')
+
+  // 登录页也挂了版本号，同样的道理：只读常量就永远是上一版。
+  const login = read('web/src/views/Login.vue')
+  assert.match(login, /const appVersionLabel = ref\(__APP_VERSION_LABEL__\)/, '登录页版本号要能运行时更新')
+  assert.match(login, /api\.get\('\/api\/version'\)/)
+  assert.match(login, /appVersionLabel\.value = label/)
+})
+
 test('版本号真源、构建注入与界面显示接线完整', () => {
   const meta = JSON.parse(read('version.json'))
   assert.ok(/^\d+\.\d+\.\d+$/.test(meta.version))

@@ -95,3 +95,17 @@ test('冒烟脚本不写真实数据目录', () => {
     assert.match(preload, /getDataFile: name => path\.join\(tmpDir, name\)/);
     assert.match(preload, /getShareFilePath: \(\) => path\.join\(tmpDir, 'share\.txt'\)/);
 });
+
+test('/api/version 免鉴权且读仓库根版本文件', () => {
+    const auth = read('src/controllers/admin/auth-routes.ts');
+
+    // 侧边栏在登录页之后才有，但版本号不该受登录态影响；更重要的是白名单漏了它，
+    // 前端 fetch 会拿到 401，版本号就永远停在构建期常量上。
+    assert.match(auth, /req\.path === '\/version'/, '/api/version 必须在鉴权白名单里');
+    assert.match(auth, /app\.get\('\/api\/version'/, '要有 /api/version 端点');
+    // 必须读仓库根 version.json：构建产物里的版本只在 build:web 时更新，答不了
+    // 「提交之后不重建前端，面板为什么还是旧版本」这个问题。
+    assert.match(auth, /readRepoVersion/, '版本号要读真源，不能用构建期常量');
+    assert.match(auth, /no-cache, no-store, must-revalidate/, '版本响应不能被浏览器缓存');
+});
+

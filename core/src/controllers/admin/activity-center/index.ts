@@ -6,7 +6,7 @@ import { mountActivityOverviewRoutes } from './overview-routes';
 import { mountQingMeiActivityRoutes } from './qingmei-routes';
 import { mountQixiActivityRoutes } from './qixi-routes';
 import { mountStellarActivityRoutes } from './stellar-routes';
-import { mountSweetPotatoActivityRoutes } from './sweet-potato-routes';
+import { mountYishuHuanfuActivityRoutes } from './yishuhuanfu-routes';
 import { mountWeatherActivityRoutes } from './weather-routes';
 import { mountPetDiaryRoutes } from './pet-diary-routes';
 
@@ -14,7 +14,7 @@ function mountActivityCenterRoutes(app: Application, ctx: AdminContext): void {
     const routes = createActivityRouteContext(app, ctx);
     mountActivityOverviewRoutes(routes);
     mountStellarActivityRoutes(routes);
-    mountSweetPotatoActivityRoutes(routes);
+    mountYishuHuanfuActivityRoutes(routes);
     mountQingMeiActivityRoutes(routes);
     mountQixiActivityRoutes(routes);
     mountCharityActivityRoutes(routes);
